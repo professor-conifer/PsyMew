@@ -2,7 +2,7 @@
 
 A competitive Pokémon battle-bot for [Pokemon Showdown](https://pokemonshowdown.com/) powered by **Google Gemini** or **Anthropic Claude**.
 
-PsyMew uses large language models as its decision engine — it reads the full battle state, reasons about type matchups, damage calcs, speed tiers, and win conditions, then picks the best move via function calling. It supports every format: singles, doubles (WIP), VGC, random battles, and more across all generations.
+PsyMew uses large language models as its decision engine — it reads the full battle state, reasons about type matchups, damage calcs, speed tiers, and win conditions, then picks the best move via function calling. It supports every format: singles, doubles (WIP), VGC, random battles, and more across all generations. Feel free to contribute to the project!
 
 > Fork of [Foul Play](https://github.com/pmariglia/foul-play) with a complete AI overhaul to the decision making battle engine.
 
