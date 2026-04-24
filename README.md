@@ -6,6 +6,7 @@ PsyMew uses large language models as its decision engine — it reads the full b
 
 > Fork of [Foul Play](https://github.com/pmariglia/foul-play) with a complete AI overhaul to the decision making battle engine.
 
+[Join the PsyMew Discord Community!](https://discord.gg/N34QduHdUP)
 ---
 
 ## Features
