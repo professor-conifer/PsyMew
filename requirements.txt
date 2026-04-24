@@ -1,0 +1,8 @@
+requests==2.32.4
+websockets==14.1
+python-dateutil==2.8.0
+poke-engine==0.0.46 --config-settings="build-args=--features poke-engine/terastallization --no-default-features"
+google-genai>=1.0
+google-auth>=2.30
+google-auth-oauthlib>=1.0
+anthropic>=0.50
