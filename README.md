@@ -4,7 +4,7 @@ A competitive Pokémon battle-bot for [Pokemon Showdown](https://pokemonshowdown
 
 PsyMew uses large language models as its decision engine — it reads the full battle state, reasons about type matchups, damage calcs, speed tiers, and win conditions, then picks the best move via function calling. It supports every format: singles, doubles (WIP), VGC, random battles, and more across all generations.
 
-> Fork of [Foul Play](https://github.com/pmariglia/foul-play) with a complete AI overhaul.
+> Fork of [Foul Play](https://github.com/pmariglia/foul-play) with a complete AI overhaul to the decision making battle engine.
 
 ---
 
@@ -28,7 +28,7 @@ PsyMew uses large language models as its decision engine — it reads the full b
 
 Set the engine in your `.env`:
 ```ini
-DECISION_ENGINE=gemini   # or claude, mcts
+DECISION_ENGINE=claude   # or claude, mcts
 ```
 
 ---
@@ -81,10 +81,10 @@ PS_USERNAME=your_bot_name
 PS_PASSWORD=your_password
 PS_BOT_MODE=accept_challenge
 PS_FORMAT=gen9randombattle
-TUTOR_MODE=1
+# TUTOR_MODE=0   // Should be disabled by default unless you are a developer since it does not work properly yet
 
 # AI engine (gemini, claude, or mcts)
-DECISION_ENGINE=gemini
+DECISION_ENGINE=claude
 
 # Gemini auth (if not using OAuth)
 # GEMINI_API_KEY=your_key
