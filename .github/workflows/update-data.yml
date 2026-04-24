@@ -10,7 +10,7 @@ jobs:
       PYTHONPATH: "."
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: main
       - name: Set up Python
@@ -20,13 +20,19 @@ jobs:
       - name: Install Requirements
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install requests==2.32.4
       - name: Run update script pokedex
         run: |
           python ./data/scripts/update_pokedex.py
       - name: Overwrite pokedex.json
         run: |
           mv ./pokedex_new.json ./data/pokedex.json
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install TypeScript compiler
+        run: npm install -g typescript
       - name: Run update script moves
         run: |
           python ./data/scripts/update_moves.py
@@ -34,7 +40,7 @@ jobs:
         run: |
           mv ./data/new_moves.json ./data/moves.json
       - name: Create or update pull request
-        uses: peter-evans/create-pull-request@v3
+        uses: peter-evans/create-pull-request@v6
         with:
           commit-message: Data update from smogon/pokemon-showdown
           branch: create-pull-request/update-data

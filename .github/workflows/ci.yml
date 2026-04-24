@@ -9,7 +9,24 @@ on:
       - main
 
 jobs:
-  build:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+    - name: Install lint tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install ruff==0.6.5
+    - name: Lint
+      run: ruff check
+    - name: Format check
+      run: ruff format --check --diff
+
+  test:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -20,9 +37,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements-dev.txt
-    - name: fmt, lint, & test
-      run: |
-        ruff check
-        ruff format --check --diff
-        pytest tests
+        # Install core deps only (skip poke-engine which needs Rust, skip AI packages)
+        pip install requests==2.32.4 websockets==14.1 python-dateutil==2.8.0 pytest==8.3.3
+    - name: Run tests
+      run: pytest tests
