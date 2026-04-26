@@ -613,22 +613,32 @@ async def _attach_gemini_context(battle, ps_websocket_client):
     # Get hardcoded rule card
     rule_card = get_rule_card(battle.format_info.gen, battle.format_info.format_name)
 
-    # Verify rules via live Google Search (non-blocking, with timeout)
+    # Verify rules + fetch meta context via live Google Search (with timeout)
     try:
-        from fp.gemini.format_research import verify_format_rules
+        from fp.gemini.format_research import verify_format_rules, fetch_format_meta_context
         from fp.gemini.client import get_client, get_model_name
 
         client = get_client(
             auth_mode=FoulPlayConfig.gemini_auth_mode,
             api_key_override=FoulPlayConfig.gemini_api_key,
         )
-        battle.format_rules_text = await verify_format_rules(
-            client, get_model_name(), battle.format_info, rule_card
+        model_name = get_model_name()
+
+        # Run both fetches concurrently
+        rules_task = asyncio.ensure_future(
+            verify_format_rules(client, model_name, battle.format_info, rule_card)
         )
-        logger.info("Format rules verified and attached")
+        meta_task = asyncio.ensure_future(
+            fetch_format_meta_context(client, model_name, battle.format_info)
+        )
+        battle.format_rules_text, battle.format_meta_context = await asyncio.gather(
+            rules_task, meta_task
+        )
+        logger.info("Format rules verified and meta context fetched")
     except Exception as exc:
-        logger.warning("Rule verification failed, using stored card: %s", exc)
+        logger.warning("Rule/meta verification failed, using stored card: %s", exc)
         battle.format_rules_text = rule_card
+        battle.format_meta_context = ""
 
     # Tutor session
     if FoulPlayConfig.tutor_mode:

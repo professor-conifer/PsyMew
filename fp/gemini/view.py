@@ -100,8 +100,15 @@ class GeminiBattleView:
     # Format rules text (verified)
     format_rules_text: str = ""
 
-    # Readable battle history for Gemini context
+    # Current meta knowledge for this format (fetched at battle start)
+    format_meta_context: str = ""
+
+    # Readable battle history for Gemini context (capped at last 8 turns)
     battle_history: str = ""
+
+    # Cross-turn strategic memory and opponent profiling
+    strategic_context: Optional[object] = None   # StrategicContext
+    opponent_profile: Optional[object] = None    # OpponentProfile
 
     @property
     def legal_switch_targets(self) -> list[OwnPokemon]:
@@ -118,6 +125,28 @@ class GeminiBattleView:
         target_type = move_data.get("target", "normal")
         target_map = get_move_target_semantics(self.format_info.gen, self.format_info.gametype)
         return target_map.get(target_type)
+
+    def brief_summary(self) -> str:
+        """Short one-line battle state for the strategic context update prompt."""
+        own_alive = sum(1 for p in self.own_team if p.hp > 0)
+        opp_fainted = 0
+        if self.snapshot and self.snapshot.opponent_active_slots:
+            opp_fainted = sum(1 for o in self.snapshot.opponent_active_slots.values() if o.fainted)
+        opp_alive = max(1, 6 - opp_fainted)
+        active = self.active_slots[0].pokemon if self.active_slots else None
+        opp_active = None
+        if self.snapshot and self.snapshot.opponent_active_slots:
+            for o in self.snapshot.opponent_active_slots.values():
+                if not o.fainted:
+                    opp_active = o
+                    break
+        return (
+            f"Turn {self.turn}. Us: {own_alive} alive. Opponent: ~{opp_alive} alive. "
+            f"Our active: {active.species if active else '?'} "
+            f"({active.hp_pct if active else '?'}% HP). "
+            f"Opp active: {opp_active.species if opp_active else '?'} "
+            f"({opp_active.hp_pct if opp_active else '?'}% HP)."
+        )
 
     @classmethod
     def from_battle(cls, battle) -> "GeminiBattleView":
@@ -296,7 +325,10 @@ class GeminiBattleView:
             snapshot=snapshot,
             force_switch_slots=force_switch_slots,
             format_rules_text=getattr(battle, "format_rules_text", ""),
+            format_meta_context=getattr(battle, "format_meta_context", ""),
             battle_history=battle_history,
+            strategic_context=getattr(battle, "strategic_context", None),
+            opponent_profile=getattr(battle, "opponent_profile", None),
         )
 
 
