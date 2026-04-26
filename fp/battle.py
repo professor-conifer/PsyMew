@@ -92,8 +92,15 @@ class Battle:
         self.format_info = None
         self.tutor_session = None
         self.format_rules_text = ""
+        self.format_meta_context = ""
         self.last_server_error = None
         self.gemini_msg_log = []  # cumulative msg log for Gemini (never cleared)
+
+        # Strategic AI state (persists across turns)
+        from fp.strategic_context import StrategicContext
+        from fp.opponent_profile import OpponentProfile
+        self.strategic_context = StrategicContext()
+        self.opponent_profile = OpponentProfile()
 
     def __getstate__(self):
         """Exclude non-picklable Gemini client objects from copy/pickle.

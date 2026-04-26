@@ -10,30 +10,99 @@ from fp.gemini.view import GeminiBattleView
 logger = logging.getLogger(__name__)
 
 
-def build_system_prompt(format_info: FormatInfo, format_rules_text: str) -> str:
-    """Build the system prompt for the Gemini decision engine.
+def build_system_prompt(
+    format_info: FormatInfo,
+    format_rules_text: str,
+    format_meta_context: str = "",
+) -> str:
+    """Build the system prompt for the Gemini decision engine."""
+    is_doubles = getattr(format_info, "gametype", "singles") in ("doubles", "triples")
 
-    Includes verified format rules and behavioral constraints.
-    """
-    return f"""You are a World Championship-level Pokemon battle AI on Pokemon Showdown.
+    meta_block = ""
+    if format_meta_context:
+        meta_block = f"\nCURRENT META CONTEXT:\n{format_meta_context}\n"
+
+    doubles_block = ""
+    if is_doubles:
+        doubles_block = """
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DOUBLES / VGC SPECIFIC
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Fake Out timing: use it to buy a free turn for your main attacker, not just for chip damage
+- Protect is information: when the opponent uses Protect, they expected your attack — punish the reveal next turn
+- Tailwind vs Trick Room: identify which archetype they're running by turn 2 and adapt immediately
+- Spread moves hit both targets (Rock Slide, Earthquake, Heat Wave) — prioritize when both targets are vulnerable
+- Redirection (Rage Powder / Follow Me) blocks targeted moves — predict it and redirect toward the supporter instead
+- Target selection matters: if their Pokemon A is immune to your move, targeting Pokemon B may not be correct either — read the board
+- Position advantage: having the better Tailwind/TR control is often more valuable than immediate damage
+"""
+
+    return f"""You are PsyMew — a master-level competitive Pokémon battle AI designed to challenge and defeat world-class players on Pokémon Showdown.
 
 FORMAT: {format_info.format_name} (Gen {format_info.gen}, {format_info.gametype})
 {format_rules_text}
+{meta_block}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+YOUR ROLE: STRATEGIC COMMANDER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+You are not a move picker. You are a strategic general. Every turn you receive battle data — damage estimates, type matchups, speed tiers, threat assessments. This data informs your reasoning. It does not make your decision.
 
-RULES:
+DECISION FRAMEWORK — evaluate in this order every turn:
+
+1. WIN CONDITION
+   What is my path to winning? Which of my Pokémon can sweep, wall, or outlast to victory?
+   What does that win condition need: specific threats removed, hazards up, a gimmick saved?
+   Am I protecting it, or sacrificing it early for short-term gain?
+
+2. OPPONENT'S WIN CONDITION
+   What is their clearest path to winning? Which Pokémon is their key threat?
+   What do I need to deny them? Do I have a safe answer, or must I play around it?
+
+3. THE PREDICTION GAME
+   What does my opponent expect me to do here?
+   Is there a better play they won't anticipate?
+   Creating 50/50s — situations where their read determines the outcome — is elite play.
+   If they guess right, you break even. If they guess wrong, you gain a massive advantage.
+   Identify the 50/50 and choose the branch that punishes their most likely mistake.
+
+4. TEMPO AND MOMENTUM
+   Am I forcing their hand or reacting to theirs?
+   Maintaining tempo means threatening rather than answering.
+   Pivot moves (U-turn / Volt Switch / Flip Turn) steal tempo and gather information.
+   Entry hazards compound every turn — Stealth Rock at turn 1 may be the strongest play
+   even if a damage move looks better on paper right now.
+
+5. RESOURCE MANAGEMENT
+   HP, PP, and gimmicks (Tera / Mega / Z-Move / Dynamax) are finite.
+   Do NOT spend Tera to win a turn you would have won anyway.
+   Save gimmicks for the moment they create an unwinnable scenario for the opponent.
+   Endgame (2v2 or 1v1): stop approximating — calculate exact KOs from the damage ranges given.
+{doubles_block}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ELITE PLAY PRINCIPLES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Force decisions: create situations where every option the opponent has is a bad guess for them
+- Deny free information: don't reveal your win condition before it's too late to stop
+- Win condition protection takes priority over short-term gains
+- Speed tier 50/50s: when opponent's speed is within ~10% of yours after EV/nature variance, treat it as a live coin flip and play accordingly
+- Chip damage compounds: Burn / Poison / Rocks / Spikes / Sand wins long games without direct KOs
+- Never trade your answer to their win condition for neutral KO value elsewhere on their team
+- Pivoting out of a bad matchup is often stronger than clicking the best move — momentum matters
+- Setup turns are free turns: if you can use Dragon Dance / Swords Dance / Calm Mind safely, that's often worth more than any direct attack
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MOVE DATA FORMAT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Move entries below show: [Type] — effectiveness | STAB flag | estimated damage vs opponent HP | PP remaining.
+Damage estimates use your current stats and predicted opponent stats. Use them as inputs to your reasoning — not as a decision order.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 1. You MUST use the function-calling tool. Never respond with text.
-2. ONLY pick moves/switches from the enum values in the tool schema.
-3. Each move has a SCORE (0-100). The score accounts for type effectiveness, STAB, damage, abilities, and weather. Higher score = better move.
-4. ALWAYS prefer the highest-scored move unless you have a specific strategic reason (e.g., predicting a switch, setting up, pivoting).
-5. NEVER pick a move scored 0 — it means the opponent is IMMUNE.
-6. If all moves score below 20, strongly consider switching.
-7. Switch targets also have scores — higher = better defensive + offensive matchup.
-
-STRATEGY:
-- When ahead: play safe, trade 1-for-1, protect your win condition.
-- When behind: take calculated risks, find sweep opportunities.
-- Predict switches: if the opponent is clearly going to switch, target the incoming Pokemon or use the free turn to set up.
-- Endgame: every HP point matters. Trust the damage numbers.
+2. ONLY pick moves / switches from the enum values in the tool schema — no exceptions.
+3. NEVER use a move against a type-immune target (shown as IMMUNE in the move list).
+4. Move data shows estimated damage and matchup info — use it as one input among many.
 """
 
 
@@ -88,34 +157,64 @@ def _build_game_phase_guidance(view: GeminiBattleView) -> str:
     return "\n".join(guidance) if guidance else ""
 
 
+def _ko_label(min_pct: float, max_pct: float) -> str:
+    """Convert damage range into a human-readable KO label."""
+    if min_pct >= 100:
+        return "GUARANTEED KO"
+    if max_pct >= 100:
+        return f"possible KO ({min_pct:.0f}–{max_pct:.0f}%)"
+    if max_pct >= 50:
+        return f"2HKO ({min_pct:.0f}–{max_pct:.0f}%)"
+    return f"~{min_pct:.0f}–{max_pct:.0f}% dmg"
+
+
+def _effectiveness_label(type_mult: float) -> str:
+    if type_mult == 0:
+        return "IMMUNE"
+    if type_mult >= 4:
+        return "4x effective"
+    if type_mult >= 2:
+        return "2x effective"
+    if type_mult <= 0.25:
+        return "0.25x resisted"
+    if type_mult <= 0.5:
+        return "0.5x resisted"
+    return "neutral"
+
+
 def build_turn_prompt(view: GeminiBattleView) -> str:
     """Build the per-turn user prompt describing current battle state."""
     from fp.gemini.move_scorer import score_all_actions
+    from fp.opponent_profile import TeamArchetype
 
-    lines = [f"=== TURN {view.turn} ===\n"]
+    lines = []
 
-    # --- Game phase guidance ---
+    # --- Strategic memory (cross-turn context) ---
+    if view.strategic_context is not None:
+        mem_block = view.strategic_context.to_prompt_block()
+        if mem_block:
+            lines.append(mem_block)
+            lines.append("")
+
+    lines.append(f"=== TURN {view.turn} ===\n")
+
+    # --- Situational phase guidance ---
     phase_guidance = _build_game_phase_guidance(view)
     if phase_guidance:
         lines.append(phase_guidance)
         lines.append("")
 
-    # --- Battle history (what happened so far) ---
+    # --- Battle history ---
     if view.battle_history and view.battle_history != "(No battle history yet)":
         lines.append("BATTLE LOG (previous turns):")
         lines.append(view.battle_history)
         lines.append("")
 
-    # --- Get primary opponent info for speed calc ---
-    primary_opp = None
-    if view.snapshot and view.snapshot.opponent_active_slots:
-        for _, opp in sorted(view.snapshot.opponent_active_slots.items()):
-            if not opp.fainted:
-                primary_opp = opp
-                break
-
-    # --- Own active slots with SCORED moves ---
+    # --- Own active slots with raw move data ---
     lines.append("YOUR ACTIVE POKEMON:")
+    threat = None
+    scored_switches = []
+
     for slot in view.active_slots:
         pkmn = slot.pokemon
         type_str = "/".join(pkmn.types) if pkmn.types else "???"
@@ -130,28 +229,42 @@ def build_turn_prompt(view: GeminiBattleView) -> str:
             lines.append("    ** MUST SWITCH (fainted/forced) **")
             continue
 
-        # Score all actions for this slot
+        # Get scored data (scores kept internally for fallback, not shown to AI)
         scored_moves, scored_switches, threat = score_all_actions(view, slot.slot_index)
 
-        # Present moves sorted by score (best first)
-        lines.append("    Moves (sorted best to worst):")
-        for sm in scored_moves:
-            # Find the original move data for PP info
-            orig_move = next((m for m in slot.legal_moves if m.id == sm.move_id), None)
-            pp_str = f"PP:{orig_move.pp}/{orig_move.max_pp}" if orig_move else ""
-            disabled = " [DISABLED]" if (orig_move and orig_move.disabled) else ""
+        # Build a lookup for score data by move ID
+        score_map = {sm.move_id: sm for sm in scored_moves}
+
+        lines.append("    Moves:")
+        for move in slot.legal_moves:
+            sm = score_map.get(move.id)
+            pp_str = f"PP:{move.pp}/{move.max_pp}"
+            disabled = " [DISABLED]" if move.disabled else ""
+            move_type = move.move_type.capitalize()
+
+            if sm is None:
+                lines.append(f"      - {move.id} [{move_type}] — {pp_str}{disabled}")
+                continue
 
             if sm.is_immune:
-                lines.append(f"      - {sm.move_id}: SCORE=0 ** DO NOT USE ** {sm.reason}")
-            else:
-                lines.append(
-                    f"      - {sm.move_id}: SCORE={sm.score:.0f}/100 ({sm.reason}) {pp_str}{disabled}"
-                )
+                lines.append(f"      - {move.id} [{move_type}]: IMMUNE — do not use{disabled}")
+                continue
+
+            type_mult = getattr(sm, "type_mult", 1.0)
+            effectiveness = _effectiveness_label(type_mult)
+            stab = " | STAB" if getattr(sm, "is_stab", False) else ""
+            min_pct, max_pct = sm.damage_pct
+            ko_label = _ko_label(min_pct, max_pct) if move.base_power > 0 or move.category != "status" else ""
+            dmg_part = f" | {ko_label}" if ko_label else ""
+
+            lines.append(
+                f"      - {move.id} [{move_type}] — {effectiveness}{stab}{dmg_part} | {pp_str}{disabled}"
+            )
 
         # Gimmick availability
         gimmicks = []
         if slot.can_terastallize:
-            gimmicks.append(f"Terastallize ({slot.can_terastallize})")
+            gimmicks.append(f"Terastallize → {slot.can_terastallize} type")
         if slot.can_mega_evo:
             gimmicks.append("Mega Evolve")
         if slot.can_dynamax:
@@ -162,23 +275,23 @@ def build_turn_prompt(view: GeminiBattleView) -> str:
             lines.append(f"    Gimmicks available: {', '.join(gimmicks)}")
 
         if slot.trapped:
-            lines.append("    ** TRAPPED (cannot switch) **")
+            lines.append("    ** TRAPPED — cannot switch **")
 
     # --- Threat assessment ---
-    if threat.best_move_name:
-        threat_lines = ["\nTHREAT ASSESSMENT (what opponent can do to you):"]
-        speed_str = "OUTSPEEDS you" if threat.they_outspeed else "you outspeed"
-        threat_lines.append(f"  Opponent {speed_str}")
+    if threat and threat.best_move_name:
+        threat_lines = ["\nTHREAT ASSESSMENT:"]
+        speed_str = "OUTSPEEDS you" if threat.they_outspeed else "you outspeed them"
+        threat_lines.append(f"  Speed: {speed_str}")
         threat_lines.append(
-            f"  Their best move: {threat.best_move_name} ({threat.best_move_type.capitalize()}) "
-            f"= ~{threat.estimated_damage_pct:.0f}% damage to you"
+            f"  Their best move: {threat.best_move_name} [{threat.best_move_type.capitalize()}]"
+            f" = ~{threat.estimated_damage_pct:.0f}% damage to you"
         )
         if threat.can_ko and threat.they_outspeed:
-            threat_lines.append("  ** DANGER: They KO you before you move! Consider switching or priority. **")
+            threat_lines.append("  !! CRITICAL: They KO you before you move — switch or use priority !!")
         elif threat.can_ko:
-            threat_lines.append("  ** WARNING: They can KO you next turn if you don't KO first. **")
+            threat_lines.append("  !! WARNING: They can KO you — KO them first or switch !!")
         elif threat.can_2hko:
-            threat_lines.append("  They 2HKO you. Don't stay in too long unless you can KO.")
+            threat_lines.append("  They 2HKO you — don't stay unless you can KO them first")
 
         if threat.predicted_moves:
             threat_lines.append(f"  Predicted unrevealed moves: {', '.join(threat.predicted_moves[:3])}")
@@ -189,16 +302,15 @@ def build_turn_prompt(view: GeminiBattleView) -> str:
 
         lines.extend(threat_lines)
 
-    # --- Scored switch targets ---
+    # --- Switch options ---
     if scored_switches:
-        lines.append("\n    AVAILABLE SWITCHES (sorted best to worst):")
+        lines.append("\n    AVAILABLE SWITCHES:")
         for ss in scored_switches:
             target = next((p for p in view.legal_switch_targets if p.name == ss.pokemon_name), None)
             if target:
                 type_str = "/".join(target.types) if target.types else "???"
                 lines.append(
-                    f"      - {ss.pokemon_name} [{type_str}] {target.hp_pct}% HP: "
-                    f"SCORE={ss.score:.0f}/100 ({ss.reason})"
+                    f"      - {ss.pokemon_name} [{type_str}] {target.hp_pct}% HP — {ss.reason}"
                 )
 
     # --- Opponent active slots ---
@@ -221,7 +333,6 @@ def build_turn_prompt(view: GeminiBattleView) -> str:
 
             if opp.revealed_ability:
                 lines.append(f"    Ability: {opp.revealed_ability}")
-                # Flag ability-based immunities prominently
                 _ability_immunities = {
                     "lightningrod": "Electric", "voltabsorb": "Electric", "motordrive": "Electric",
                     "waterabsorb": "Water", "stormdrain": "Water", "dryskin": "Water",
@@ -230,7 +341,7 @@ def build_turn_prompt(view: GeminiBattleView) -> str:
                 norm_ability = opp.revealed_ability.lower().replace(" ", "").replace("-", "")
                 immune_type = _ability_immunities.get(norm_ability)
                 if immune_type:
-                    lines.append(f"    ** IMMUNE to {immune_type} moves via {opp.revealed_ability}! Do NOT use {immune_type} attacks. **")
+                    lines.append(f"    !! IMMUNE to {immune_type} moves via {opp.revealed_ability} !!")
             if opp.revealed_item:
                 lines.append(f"    Item: {opp.revealed_item}")
             if opp.revealed_moves:
@@ -256,7 +367,6 @@ def build_turn_prompt(view: GeminiBattleView) -> str:
         if field_lines:
             lines.append("\nFIELD: " + " | ".join(field_lines))
 
-        # Side conditions
         if view.snapshot.own_side_conditions:
             own_conds = [f"{k}(x{v})" if v > 1 else k
                          for k, v in view.snapshot.own_side_conditions.items()]
@@ -266,13 +376,12 @@ def build_turn_prompt(view: GeminiBattleView) -> str:
                          for k, v in view.snapshot.opp_side_conditions.items()]
             lines.append(f"OPPONENT'S SIDE: {', '.join(opp_conds)}")
 
-        # Gimmicks used
         if view.snapshot.opp_gimmicks_used:
             lines.append(f"OPPONENT GIMMICKS USED: {', '.join(view.snapshot.opp_gimmicks_used)}")
         if view.snapshot.own_gimmicks_used:
             lines.append(f"YOUR GIMMICKS USED: {', '.join(view.snapshot.own_gimmicks_used)}")
 
-    # --- Your full team summary ---
+    # --- Full team summary ---
     lines.append("\nYOUR FULL TEAM:")
     for p in view.own_team:
         type_str = "/".join(p.types) if p.types else "???"
@@ -290,11 +399,13 @@ def build_turn_prompt(view: GeminiBattleView) -> str:
                 f"Moves: {', '.join(p.moves[:4])}{spe_str}"
             )
 
-    lines.append("\nACTION GUIDE:")
-    lines.append("  - Pick the highest-scored move unless you have a strong strategic reason not to.")
-    lines.append("  - NEVER pick a move scored 0 (IMMUNE). Switch instead.")
-    lines.append("  - Consider switching if all moves score below 20 and a switch scores above 40.")
-    lines.append("  - Use the function-calling tool to submit your action.")
+    # --- Opponent profile (if we've learned something) ---
+    if view.opponent_profile is not None:
+        profile_block = view.opponent_profile.to_prompt_block()
+        if profile_block:
+            lines.append("")
+            lines.append(profile_block)
+
     return "\n".join(lines)
 
 

@@ -2565,9 +2565,18 @@ def transform(battle, split_msg):
 
 
 def turn(battle, split_msg):
+    prev_turn = battle.turn or 0
     battle.turn = int(split_msg[2])
     logger.info("")
     logger.info("Turn: {}".format(battle.turn))
+
+    # Update opponent profile from accumulated messages
+    if hasattr(battle, "opponent_profile") and battle.opponent_profile is not None:
+        msg_source = getattr(battle, "gemini_msg_log", None) or battle.msg_list
+        try:
+            battle.opponent_profile.update_from_msg_list(msg_source, prev_turn)
+        except Exception as exc:
+            logger.debug("OpponentProfile update failed: %s", exc)
 
 
 def noinit(battle, split_msg):
@@ -3299,8 +3308,8 @@ def update_battle(battle: Battle, msg: str):
             # Accumulate for Gemini (trimmed to last 500 entries)
             if hasattr(battle, 'gemini_msg_log'):
                 battle.gemini_msg_log.append(line)
-                if len(battle.gemini_msg_log) > 500:
-                    battle.gemini_msg_log = battle.gemini_msg_log[-500:]
+                if len(battle.gemini_msg_log) > 300:
+                    battle.gemini_msg_log = battle.gemini_msg_log[-300:]
 
     return False
 

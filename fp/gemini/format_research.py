@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 # Timeout for the verification search call at battle start
 _VERIFY_TIMEOUT_SECONDS = 8.0
+_META_TIMEOUT_SECONDS = 10.0
 
 
 async def verify_format_rules(
@@ -99,3 +100,60 @@ async def verify_format_rules(
     except Exception as exc:
         logger.warning("Format verification failed: %s — using stored rule card", exc)
         return rule_card_text + "\n\n[Note: Live verification failed — rules may be outdated]"
+
+
+async def fetch_format_meta_context(
+    client,
+    model: str,
+    format_info: FormatInfo,
+) -> str:
+    """Fetch current competitive meta knowledge for this format via Google Search.
+
+    Returns a concise threat/archetype summary (~150 words) for injection into
+    the system prompt under CURRENT META CONTEXT.
+    """
+    format_name = format_info.format_name
+    gametype = format_info.gametype
+
+    prompt = (
+        f"For Pokemon Showdown format '{format_name}' as of April 2026:\n"
+        f"1. What are the top 5-8 threats every team must prepare for? "
+        f"List them by name with a one-line reason each.\n"
+        f"2. What are the 2-3 dominant team archetypes "
+        f"(e.g., hyper offense, balance, stall, trick room, weather, tailwind)?\n"
+        f"3. What key strategies or cores define the current meta?\n"
+        f"4. What counter-meta plays are seeing success?\n\n"
+        f"Gametype: {gametype}. "
+        f"Keep the entire response under 200 words. "
+        f"Be specific with Pokemon names. "
+        f"Focus on actionable threat intelligence for a competitive battle AI."
+    )
+
+    try:
+        response = await asyncio.wait_for(
+            client.aio.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    tools=[types.Tool(google_search=types.GoogleSearch())],
+                    temperature=0.1,
+                    max_output_tokens=512,
+                ),
+            ),
+            timeout=_META_TIMEOUT_SECONDS,
+        )
+
+        if response.text:
+            logger.info("Format meta context fetched for %s", format_name)
+            return response.text.strip()
+        else:
+            logger.warning("Empty meta context response for %s", format_name)
+            return ""
+
+    except asyncio.TimeoutError:
+        logger.warning("Meta context fetch timed out for %s", format_name)
+        return ""
+
+    except Exception as exc:
+        logger.warning("Meta context fetch failed for %s: %s", format_name, exc)
+        return ""

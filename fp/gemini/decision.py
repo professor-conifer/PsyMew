@@ -23,7 +23,7 @@ from fp.gemini.view import GeminiBattleView
 logger = logging.getLogger(__name__)
 
 # Max time for a single Gemini call
-_DECISION_TIMEOUT_SECONDS = 15.0
+_DECISION_TIMEOUT_SECONDS = 25.0
 
 
 def _parse_action_part(args: dict, view: GeminiBattleView, slot_idx: int = 0) -> str:
@@ -108,15 +108,16 @@ def _compute_temperature(view) -> float:
         opp_fainted = sum(1 for o in view.snapshot.opponent_active_slots.values() if o.fainted)
         opp_alive = max(1, 6 - opp_fainted)
 
-    # Endgame: both sides low
+    # Endgame: both sides low — some variance even here so we're not readable
     if own_alive <= 2 and opp_alive <= 2:
-        return 0.2
+        return 0.3
 
-    # Losing badly
+    # Losing badly — high-variance gambles are correct here
     if opp_alive > own_alive + 1:
-        return 0.5
+        return 0.85
 
-    return 0.35
+    # Standard play — genuinely creative, not just highest-score
+    return 0.65
 
 
 async def _call_gemini(
@@ -139,17 +140,27 @@ async def _call_gemini(
             f'"{error_context}". Pick a different valid action.'
         )
 
-    config = types.GenerateContentConfig(
+    from config import FoulPlayConfig as _cfg
+    thinking_budget = _cfg.gemini_thinking_budget if hasattr(_cfg, "gemini_thinking_budget") else 0
+
+    config_kwargs: dict = dict(
         system_instruction=system_prompt,
         tools=tools,
         temperature=temperature,
-        max_output_tokens=2048,
+        max_output_tokens=8192,
         tool_config=types.ToolConfig(
             function_calling_config=types.FunctionCallingConfig(
                 mode="ANY",
             )
         ),
     )
+
+    if thinking_budget > 0 and hasattr(types, "ThinkingConfig"):
+        config_kwargs["thinking_config"] = types.ThinkingConfig(
+            thinking_budget=thinking_budget
+        )
+
+    config = types.GenerateContentConfig(**config_kwargs)
 
     # Retry with backoff for transient 429/503 errors
     last_exc = None
@@ -217,11 +228,19 @@ async def find_best_move_gemini(battle) -> list[dict]:
     # Build the view
     view = GeminiBattleView.from_battle(battle)
 
-    # Handle force-switch: use scorer to pick best switch target
+    # Handle force-switch: active slots are empty because our Pokemon fainted
     if not view.active_slots and not view.is_team_preview:
-        best = get_best_action(view)
-        logger.info("Force-switch: scorer picked %s", best)
-        return [{"decision": best, "slot": 0}]
+        from fp.gemini.move_scorer import score_switch, ThreatInfo
+        targets = view.legal_switch_targets
+        if not targets:
+            # Absolute last resort — no legal switches available
+            return [{"decision": "move struggle", "slot": 0}]
+        # Score each available switch on defensive matchup alone (no active slot context)
+        scored = [score_switch(t, view, ThreatInfo()) for t in targets]
+        scored.sort(key=lambda s: s.score, reverse=True)
+        best_name = scored[0].pokemon_name
+        logger.info("Force-switch: scored targets, picked %s (score=%.0f)", best_name, scored[0].score)
+        return [{"decision": f"switch {best_name}", "slot": 0}]
 
     # --- Auto-play: use scorer for obvious decisions (singles only) ---
     if not view.is_team_preview and len(view.active_slots) == 1:
@@ -290,8 +309,7 @@ async def find_best_move_gemini(battle) -> list[dict]:
     model = get_model_name()
 
     # Build prompts
-    format_rules_text = getattr(battle, "format_rules_text", "")
-    system_prompt = build_system_prompt(view.format_info, format_rules_text)
+    system_prompt = build_system_prompt(view.format_info, view.format_rules_text, view.format_meta_context)
 
     if view.is_team_preview:
         user_prompt = build_team_preview_prompt(view)
@@ -325,6 +343,7 @@ async def find_best_move_gemini(battle) -> list[dict]:
 
     elif func_name == "choose_action":
         decision_str = _parse_action_part(args, view, slot_idx=0)
+        _fire_context_update(battle, view, decision_str, client, model)
         return [{"decision": decision_str, "slot": 0}]
 
     elif func_name == "choose_actions":
@@ -338,8 +357,22 @@ async def find_best_move_gemini(battle) -> list[dict]:
             else:
                 logger.warning("Missing args for %s, defaulting to struggle", slot_key)
                 actions.append({"decision": "move struggle", "slot": i})
+        summary = "; ".join(a["decision"] for a in actions)
+        _fire_context_update(battle, view, summary, client, model)
         return actions
 
     else:
         logger.warning("Unknown function call: %s", func_name)
         return [{"decision": "move struggle", "slot": 0}]
+
+
+def _fire_context_update(battle, view, decision_str: str, client, model: str) -> None:
+    """Schedule a non-blocking strategic context update after a decision is made."""
+    from fp.strategic_context import update_strategic_context_async
+    try:
+        loop = asyncio.get_event_loop()
+        loop.create_task(
+            update_strategic_context_async(battle, view, decision_str, client, model)
+        )
+    except Exception:
+        pass  # never block the main turn
