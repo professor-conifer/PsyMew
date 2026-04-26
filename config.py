@@ -89,8 +89,9 @@ class _FoulPlayConfig:
     decision_engine: str = "gemini"
     gemini_api_key: Optional[str] = None
     gemini_auth_mode: str = "auto"
-    gemini_model: str = "gemini-2.5-pro"
+    gemini_model: str = "gemini-3.1-pro-preview"
     gemini_tutor_model: str = "gemini-2.0-flash"
+    gemini_thinking_budget: int = 1024
     tutor_mode: bool = False
 
     def configure(self):
@@ -190,14 +191,14 @@ class _FoulPlayConfig:
         )
         parser.add_argument(
             "--gemini-auth-mode",
-            default="auto",
+            default=os.environ.get("GEMINI_AUTH_MODE", "auto"),
             choices=["auto", "api_key", "access_token", "adc", "oauth"],
             help="Gemini auth mode. 'oauth' uses Google login (run `python gemini_login.py` to set up). Default 'auto' tries oauth first. (default: auto)",
         )
         parser.add_argument(
             "--gemini-model",
-            default="gemini-2.5-pro",
-            help="Gemini model name (default: gemini-2.5-pro)",
+            default="gemini-3.1-pro-preview",
+            help="Gemini model name (default: gemini-3.1-pro-preview)",
         )
         parser.add_argument(
             "--gemini-tutor-model",
@@ -233,6 +234,18 @@ class _FoulPlayConfig:
             default=os.environ.get("CLAUDE_TUTOR_MODEL", "claude-sonnet-4-6"),
             help="Claude model for tutor chat (default: claude-sonnet-4-6)",
         )
+        parser.add_argument(
+            "--gemini-thinking-budget",
+            type=int,
+            default=int(os.environ.get("GEMINI_THINKING_BUDGET", "4096")),
+            help="Thinking token budget for Gemini decisions (default: 4096, 0 to disable)",
+        )
+        parser.add_argument(
+            "--claude-thinking-budget",
+            type=int,
+            default=int(os.environ.get("CLAUDE_THINKING_BUDGET", "4096")),
+            help="Thinking token budget for Claude decisions (default: 4096, 0 to disable)",
+        )
 
         args = parser.parse_args()
         
@@ -265,6 +278,7 @@ class _FoulPlayConfig:
         self.gemini_auth_mode = args.gemini_auth_mode
         self.gemini_model = args.gemini_model
         self.gemini_tutor_model = args.gemini_tutor_model
+        self.gemini_thinking_budget = args.gemini_thinking_budget
         self.tutor_mode = args.tutor_mode
 
         # Claude
@@ -272,6 +286,7 @@ class _FoulPlayConfig:
         self.claude_auth_mode = args.claude_auth_mode
         self.claude_model = args.claude_model
         self.claude_tutor_model = args.claude_tutor_model
+        self.claude_thinking_budget = args.claude_thinking_budget
 
         self.validate_config()
 

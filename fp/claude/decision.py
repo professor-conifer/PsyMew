@@ -20,7 +20,7 @@ from fp.gemini.view import GeminiBattleView
 logger = logging.getLogger(__name__)
 
 # Max time for a single Claude call
-_DECISION_TIMEOUT_SECONDS = 15.0
+_DECISION_TIMEOUT_SECONDS = 25.0
 
 
 def _parse_action_part(args: dict, view: GeminiBattleView, slot_idx: int = 0) -> str:
@@ -85,14 +85,9 @@ def _parse_team_preview(args: dict, view: GeminiBattleView) -> str:
 
 
 def _compute_temperature(view) -> float:
-    """Compute dynamic temperature based on game state.
-
-    - Endgame (<=2 alive per side): 0.2 (maximize precision)
-    - Standard play: 0.35
-    - Losing badly (down 2+ Pokemon): 0.5 (encourage creative plays)
-    """
+    """Compute dynamic temperature based on game state."""
     if view is None:
-        return 0.35
+        return 0.65
 
     own_alive = sum(1 for p in view.own_team if p.hp > 0)
 
@@ -101,13 +96,16 @@ def _compute_temperature(view) -> float:
         opp_fainted = sum(1 for o in view.snapshot.opponent_active_slots.values() if o.fainted)
         opp_alive = max(1, 6 - opp_fainted)
 
+    # Endgame — some variance even here, avoid being read
     if own_alive <= 2 and opp_alive <= 2:
-        return 0.2
+        return 0.3
 
+    # Losing badly — high-variance gambles are correct
     if opp_alive > own_alive + 1:
-        return 0.5
+        return 0.85
 
-    return 0.35
+    # Standard — genuinely creative, not just highest-score
+    return 0.65
 
 
 async def _call_claude(
@@ -129,20 +127,34 @@ async def _call_claude(
             f'"{error_context}". Pick a different valid action.'
         )
 
+    from config import FoulPlayConfig as _cfg
+    thinking_budget = _cfg.claude_thinking_budget if hasattr(_cfg, "claude_thinking_budget") else 0
+
+    create_kwargs: dict = dict(
+        model=model,
+        max_tokens=8192,
+        system=[
+            {
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+        messages=[{"role": "user", "content": user_prompt}],
+        tools=tools,
+        tool_choice={"type": "any"},
+        temperature=temperature,
+    )
+
+    if thinking_budget > 0:
+        create_kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
+
     # Retry with backoff for transient 429/503/529 errors
     last_exc = None
     for attempt in range(3):
         try:
             response = await asyncio.wait_for(
-                client.messages.create(
-                    model=model,
-                    max_tokens=2048,
-                    system=system_prompt,
-                    messages=[{"role": "user", "content": user_prompt}],
-                    tools=tools,
-                    tool_choice={"type": "any"},
-                    temperature=temperature,
-                ),
+                client.messages.create(**create_kwargs),
                 timeout=_DECISION_TIMEOUT_SECONDS,
             )
             break  # success
@@ -200,11 +212,17 @@ async def find_best_move_claude(battle) -> list[dict]:
     # Build the view
     view = GeminiBattleView.from_battle(battle)
 
-    # Handle force-switch: use scorer to pick best switch target
+    # Handle force-switch: active slots are empty because our Pokemon fainted
     if not view.active_slots and not view.is_team_preview:
-        best = get_best_action(view)
-        logger.info("Force-switch: scorer picked %s", best)
-        return [{"decision": best, "slot": 0}]
+        from fp.gemini.move_scorer import score_switch, ThreatInfo
+        targets = view.legal_switch_targets
+        if not targets:
+            return [{"decision": "move struggle", "slot": 0}]
+        scored = [score_switch(t, view, ThreatInfo()) for t in targets]
+        scored.sort(key=lambda s: s.score, reverse=True)
+        best_name = scored[0].pokemon_name
+        logger.info("Force-switch: scored targets, picked %s (score=%.0f)", best_name, scored[0].score)
+        return [{"decision": f"switch {best_name}", "slot": 0}]
 
     # --- Auto-play: use scorer for obvious decisions (singles only) ---
     if not view.is_team_preview and len(view.active_slots) == 1:
