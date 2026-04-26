@@ -38,10 +38,12 @@ logger = logging.getLogger(__name__)
 class ScoredMove:
     """A legal move with its computed quality score."""
     move_id: str
-    score: float  # 0-100
+    score: float  # 0-100 (used for fallback/MCTS, not shown in AI prompt)
     reason: str   # short explanation
     damage_pct: tuple[float, float] = (0.0, 0.0)  # (min%, max%)
     is_immune: bool = False
+    type_mult: float = 1.0   # raw type effectiveness multiplier
+    is_stab: bool = False    # whether this is a STAB move
 
 
 @dataclass
@@ -494,13 +496,13 @@ def score_move(
             score -= 10
             reason_parts.append("they KO first")
 
-        # Priority moves get a huge boost when opponent outspeeds and threatens KO
+        # Priority moves get a massive boost when opponent outspeeds and threatens KO
         move_priority = move_json.get("priority", 0)
         if move_priority > 0 and threat.they_outspeed and threat.can_ko:
-            score += 20
-            reason_parts.append(f"+{move_priority} priority")
+            score += 35  # priority is the only way to move first — highest situational value
+            reason_parts.append(f"+{move_priority} priority — only way to survive")
         elif move_priority > 0 and threat.they_outspeed:
-            score += 8
+            score += 12
             reason_parts.append(f"+{move_priority} priority")
 
     # Recoil penalty — but NOT if the move KOs (recoil doesn't matter on a KO)
@@ -515,6 +517,8 @@ def score_move(
         score=round(score, 1),
         reason=", ".join(reason_parts),
         damage_pct=(min_dmg_pct, max_dmg_pct),
+        type_mult=type_mult,
+        is_stab=is_stab,
     )
 
 
@@ -593,76 +597,146 @@ def _score_fixed_damage_move(move: LegalMove, slot: ActiveSlotView, view: Gemini
 
 
 def _score_status_move(move: LegalMove, slot: ActiveSlotView, view: GeminiBattleView, opp) -> ScoredMove:
-    """Score a status move based on context."""
+    """Score a status move based on full battle context."""
     move_id = move.id.lower()
-    move_json = all_move_json.get(move.id, {})
 
-    # Hazards — high value early game
-    if move_id in ("stealthrock", "spikes", "toxicspikes", "stickyweb"):
-        # Check if already set on opponent's side
-        opp_conditions = view.snapshot.opp_side_conditions if view.snapshot else {}
-        if move_id == "stealthrock" and any("stealthrock" in k for k in opp_conditions):
-            return ScoredMove(move.id, 5.0, "hazard already set")
-        turn = view.turn or 0
+    opp_conditions = view.snapshot.opp_side_conditions if view.snapshot else {}
+    own_conditions = view.snapshot.own_side_conditions if view.snapshot else {}
+    turn = view.turn or 0
+
+    # Compute threat for setup safety checks
+    threat = compute_threat(view, slot.slot_index)
+
+    # --- Entry hazards ---
+    if move_id == "stealthrock":
+        if any("stealthrock" in k for k in opp_conditions):
+            return ScoredMove(move.id, 5.0, "already up")
+        # Earlier = more total chip damage
+        if turn <= 2:
+            return ScoredMove(move.id, 78.0, "Stealth Rock turn 1-2 — maximum chip value")
+        if turn <= 5:
+            return ScoredMove(move.id, 65.0, "Stealth Rock early game")
+        return ScoredMove(move.id, 48.0, "Stealth Rock mid/late game")
+
+    if move_id == "spikes":
+        existing_layers = opp_conditions.get("spikes", 0)
+        if existing_layers >= 3:
+            return ScoredMove(move.id, 5.0, "max Spikes already up")
+        base_scores = [68.0, 55.0, 40.0]
+        score = base_scores[existing_layers]
+        if turn > 6:
+            score = max(score - 10, 25.0)
+        label = ["layer 1 (high value)", "layer 2 (good value)", "layer 3 (diminishing)"][existing_layers]
+        return ScoredMove(move.id, score, f"Spikes {label}")
+
+    if move_id == "toxicspikes":
+        existing = opp_conditions.get("toxicspikes", 0)
+        if existing >= 2:
+            return ScoredMove(move.id, 5.0, "max Toxic Spikes already up")
+        return ScoredMove(move.id, 55.0 if existing == 0 else 42.0, f"Toxic Spikes layer {existing + 1}")
+
+    if move_id == "stickyweb":
+        if any("stickyweb" in k for k in opp_conditions):
+            return ScoredMove(move.id, 5.0, "already up")
         if turn <= 3:
-            return ScoredMove(move.id, 55.0, "early-game hazard")
-        return ScoredMove(move.id, 35.0, "hazard setup")
+            return ScoredMove(move.id, 70.0, "Sticky Web — speed control")
+        return ScoredMove(move.id, 45.0, "Sticky Web")
 
-    # Defog / Rapid Spin — value depends on own hazards
+    # --- Hazard removal ---
     if move_id in ("defog", "rapidspin", "mortalspin", "tidyup", "courtchange"):
-        own_conditions = view.snapshot.own_side_conditions if view.snapshot else {}
         if own_conditions:
-            return ScoredMove(move.id, 50.0, "hazard removal (hazards up)")
-        return ScoredMove(move.id, 10.0, "hazard removal (no hazards)")
+            hazard_count = len(own_conditions)
+            return ScoredMove(move.id, min(40.0 + hazard_count * 10, 65.0), f"hazard removal ({hazard_count} hazards up)")
+        return ScoredMove(move.id, 10.0, "hazard removal (no hazards up)")
 
-    # Setup moves
-    if move_id in ("swordsdance", "nastyplot", "dragondance", "quiverdance",
-                    "calmmind", "bulkup", "irondefense", "shellsmash",
-                    "tailglow", "coil", "geomancy", "shiftgear"):
-        # Good if we're healthy and can survive a hit
-        if slot.pokemon.hp_pct >= 70:
-            return ScoredMove(move.id, 52.0, "setup (healthy)")
-        return ScoredMove(move.id, 25.0, "setup (low HP, risky)")
+    # --- Setup moves — score based on safety ---
+    _SETUP_MOVES = {
+        "swordsdance", "nastyplot", "dragondance", "quiverdance",
+        "calmmind", "bulkup", "irondefense", "shellsmash",
+        "tailglow", "coil", "geomancy", "shiftgear", "growth",
+        "agility", "autotomize", "rockpolish", "victorydance",
+    }
+    if move_id in _SETUP_MOVES:
+        if threat.can_ko and threat.they_outspeed:
+            return ScoredMove(move.id, 8.0, "setup unsafe — they KO before we move")
+        if threat.can_ko:
+            return ScoredMove(move.id, 28.0, "setup risky — they can KO on the switch")
+        if threat.can_2hko:
+            return ScoredMove(move.id, 48.0, "setup possible — they 2HKO, predict switch")
+        # Safe setup opportunity
+        return ScoredMove(move.id, 72.0, "setup opportunity — opponent cannot KO")
 
-    # Recovery
+    # --- Tailwind (doubles/VGC) ---
+    if move_id == "tailwind":
+        field = view.snapshot.field_state if view.snapshot else None
+        if field and getattr(field, "tailwind_own", False):
+            return ScoredMove(move.id, 5.0, "Tailwind already active")
+        return ScoredMove(move.id, 72.0, "Tailwind — speed control")
+
+    # --- Trick Room ---
+    if move_id == "trickroom":
+        field = view.snapshot.field_state if view.snapshot else None
+        if field and field.trick_room:
+            return ScoredMove(move.id, 30.0, "cancel Trick Room")
+        return ScoredMove(move.id, 65.0, "Trick Room setup")
+
+    # --- Recovery ---
     if move_id in ("recover", "roost", "softboiled", "moonlight", "morningsun",
-                    "synthesis", "slackoff", "milkdrink", "shoreup", "rest"):
-        if slot.pokemon.hp_pct <= 50:
-            return ScoredMove(move.id, 55.0, "recovery (needed)")
-        elif slot.pokemon.hp_pct <= 75:
-            return ScoredMove(move.id, 35.0, "recovery (moderate)")
-        return ScoredMove(move.id, 10.0, "recovery (not needed)")
+                    "synthesis", "slackoff", "milkdrink", "shoreup", "rest",
+                    "leechseed", "ingrain", "aquaring"):
+        hp = slot.pokemon.hp_pct
+        if hp <= 35:
+            return ScoredMove(move.id, 62.0, f"recovery (critical: {hp:.0f}% HP)")
+        elif hp <= 60:
+            return ScoredMove(move.id, 45.0, f"recovery (low: {hp:.0f}% HP)")
+        elif hp <= 80:
+            return ScoredMove(move.id, 28.0, f"recovery (moderate: {hp:.0f}% HP)")
+        return ScoredMove(move.id, 8.0, f"recovery (not needed: {hp:.0f}% HP)")
 
-    # Status moves (Thunder Wave, Toxic, Will-O-Wisp, etc.)
+    # --- Status-inflicting moves ---
     if move_id in ("thunderwave", "toxic", "willowisp", "glare", "stunspore",
-                    "nuzzle", "yawn", "sleeppowder", "spore", "hypnosis"):
+                    "nuzzle", "yawn", "sleeppowder", "spore", "hypnosis",
+                    "darkvoid", "lovelykiss", "sing", "grasswhistle"):
         if opp.status:
-            return ScoredMove(move.id, 2.0, "opponent already statused")
-        if move_id in ("spore", "sleeppowder", "hypnosis", "yawn"):
-            return ScoredMove(move.id, 45.0, "sleep move")
-        return ScoredMove(move.id, 40.0, "status move")
+            return ScoredMove(move.id, 2.0, "already statused")
+        if opp.has_substitute:
+            return ScoredMove(move.id, 5.0, "blocked by Substitute")
+        if move_id in ("spore", "sleeppowder", "darkvoid"):
+            return ScoredMove(move.id, 58.0, "sleep — best status move")
+        if move_id in ("hypnosis", "lovelykiss", "sing", "grasswhistle", "yawn"):
+            accuracy = all_move_json.get(move.id, {}).get("accuracy", 100)
+            base = 50.0 if isinstance(accuracy, bool) or accuracy >= 100 else 35.0
+            return ScoredMove(move.id, base, f"sleep (acc:{accuracy}%)")
+        return ScoredMove(move.id, 42.0, "status move")
 
-    # Protect / Detect
+    # --- Protect variants ---
     if move_id in ("protect", "detect", "spikyshield", "banefulbunker",
-                    "kingsshield", "silktrap", "obstruct"):
-        return ScoredMove(move.id, 20.0, "protect (stall)")
+                    "kingsshield", "silktrap", "obstruct", "maxguard"):
+        return ScoredMove(move.id, 22.0, "protect — scouting/stalling")
 
-    # U-turn / Volt Switch / Flip Turn — pivot moves
-    if move_id in ("uturn", "voltswitch", "flipturn", "partingshot", "teleport", "batonpass"):
-        # These are handled as damaging moves if they have BP, but if status:
-        return ScoredMove(move.id, 38.0, "pivot")
+    # --- Pivots (status-category, e.g. Teleport, Parting Shot) ---
+    if move_id in ("partingshot", "teleport", "batonpass"):
+        return ScoredMove(move.id, 40.0, "pivot/status")
 
-    # Trick / Switcheroo
+    # --- Item disruption ---
     if move_id in ("trick", "switcheroo"):
-        return ScoredMove(move.id, 30.0, "item disruption")
+        return ScoredMove(move.id, 32.0, "item disruption")
 
-    # Substitute
+    # --- Substitute ---
     if move_id == "substitute":
         if slot.pokemon.hp_pct >= 50:
-            return ScoredMove(move.id, 40.0, "substitute (healthy)")
-        return ScoredMove(move.id, 10.0, "substitute (low HP)")
+            return ScoredMove(move.id, 42.0, "substitute (healthy)")
+        return ScoredMove(move.id, 12.0, "substitute (low HP)")
 
-    # Default status move
+    # --- Encore ---
+    if move_id == "encore":
+        return ScoredMove(move.id, 40.0, "encore — lock into status/setup")
+
+    # --- Taunt ---
+    if move_id == "taunt":
+        return ScoredMove(move.id, 38.0, "taunt — prevent status moves")
+
+    # --- Default ---
     return ScoredMove(move.id, 25.0, "status move")
 
 
