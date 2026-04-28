@@ -12,6 +12,7 @@ from .random_battles import prepare_random_battles
 from poke_engine import State as PokeEngineState, monte_carlo_tree_search, MctsResult
 
 from fp.search.poke_engine_helpers import battle_to_poke_engine_state
+from fp.search.mcts_data import build_mcts_search_data, MctsSearchData
 
 logger = logging.getLogger(__name__)
 
@@ -143,3 +144,86 @@ def find_best_move(battle: Battle) -> str:
     choice = select_move_from_mcts_results(mcts_results)
     logger.info("Choice: {}".format(choice))
     return choice
+
+
+def run_mcts_for_data(
+    battle: Battle,
+    search_time_ms: int | None = None,
+) -> MctsSearchData:
+    """Run MCTS search and return structured data for LLM prompt injection.
+
+    Mirrors find_best_move() but returns aggregated statistics (visit counts,
+    average scores, determinization probabilities) instead of a single
+    decision. Used by Gemini/Claude engines to provide game-theoretic
+    search data alongside the LLM's strategic reasoning.
+
+    Parameters
+    ----------
+    battle : Battle
+        The current battle state (will be deep-copied).
+    search_time_ms : int, optional
+        Override the configured search time per determinization.
+        Defaults to FoulPlayConfig.search_time_ms.
+
+    Returns
+    -------
+    MctsSearchData
+        Structured MCTS results ready for prompt formatting and
+        distribution blending.
+    """
+    from config import FoulPlayConfig as _cfg
+
+    if search_time_ms is None:
+        search_time_ms = _cfg.search_time_ms
+
+    battle = deepcopy(battle)
+    if battle.team_preview:
+        battle.user.active = battle.user.reserve.pop(0)
+        battle.opponent.active = battle.opponent.reserve.pop(0)
+
+    if battle.battle_type == BattleType.RANDOM_BATTLE:
+        num_battles, search_time_per_battle = search_time_num_battles_randombattles(
+            battle
+        )
+        battles = prepare_random_battles(battle, num_battles)
+    elif battle.battle_type == BattleType.BATTLE_FACTORY:
+        num_battles, search_time_per_battle = search_time_num_battles_standard_battle(
+            battle
+        )
+        battles = prepare_random_battles(battle, num_battles)
+    elif battle.battle_type == BattleType.STANDARD_BATTLE:
+        num_battles, search_time_per_battle = search_time_num_battles_standard_battle(
+            battle
+        )
+        battles = prepare_battles(battle, num_battles)
+    else:
+        raise ValueError("Unsupported battle type: {}".format(battle.battle_type))
+
+    # Use the configured search time unless overridden
+    actual_search_time = search_time_ms
+
+    logger.info(
+        "MCTS data search: sampling %d battles at %dms each",
+        num_battles,
+        actual_search_time,
+    )
+    with ProcessPoolExecutor(max_workers=_cfg.parallelism) as executor:
+        futures = []
+        for index, (b, chance) in enumerate(battles):
+            fut = executor.submit(
+                get_result_from_mcts,
+                battle_to_poke_engine_state(b).to_string(),
+                actual_search_time,
+                index,
+            )
+            futures.append((fut, chance, index))
+
+    mcts_results = [(fut.result(), chance, index) for (fut, chance, index) in futures]
+    data = build_mcts_search_data(mcts_results, actual_search_time)
+    logger.info(
+        "MCTS data: %d dets, %d rollouts, %d options in blended policy",
+        data.num_determinizations,
+        data.total_rollouts,
+        len(data.blended_policy),
+    )
+    return data
