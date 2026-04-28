@@ -97,12 +97,49 @@ Move entries below show: [Type] — effectiveness | STAB flag | estimated damage
 Damage estimates use your current stats and predicted opponent stats. Use them as inputs to your reasoning — not as a decision order.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DISTRIBUTION-BASED OUTPUT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+You output RELATIVE PREFERENCES as integer weights (1-10) using the
+choose_action_distribution tool. The actual move is sampled from your
+weighted distribution — this makes you unpredictable. Opponents cannot
+exploit deterministic patterns because you mix strategies naturally.
+
+Weight assignment guidance:
+- Assign higher weights to options you believe are strategically stronger
+- Spread weights across GENUINELY VIABLE alternatives — if two moves
+  are close in value, give them similar weights
+- Only concentrate weight heavily (8-10) when one option clearly dominates
+- Include ALL options you consider viable, even if they're not your top pick
+- Omit only options you've ruled out entirely (immune moves, suicidal plays)
+- The distribution IS your strategy — think about what mix of plays your
+  opponent will struggle to predict, not just what you'd do in one game
+
+If the provided MCTS data strongly favors an option your strategic
+analysis disagrees with, trust your reasoning — the search engine
+makes assumptions about unrevealed sets that may not match reality.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MCTS SEARCH INSIGHTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Each turn you will receive game-theoretic search data from our battle
+engine. The engine runs millions of simulated rollouts across multiple
+possible opponent team configurations (determinizations). For each
+option, you'll see:
+  - Visit percentage: how often the search engine selected this option
+  - Average score: expected outcome when this option was played (0=loss, 1=win)
+
+Use this data as strategic input alongside everything else. The search
+works under assumptions about their unrevealed moves, items, and
+abilities — it may overfit to common configurations. Your judgment
+about what this specific opponent actually has takes priority.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 RULES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-1. You MUST use the function-calling tool. Never respond with text.
-2. ONLY pick moves / switches from the enum values in the tool schema — no exceptions.
-3. NEVER use a move against a type-immune target (shown as IMMUNE in the move list).
-4. Move data shows estimated damage and matchup info — use it as one input among many.
+1. You MUST use the choose_action_distribution tool. Never respond with text.
+2. ONLY reference options from the enum values in the tool schema — no exceptions.
+3. NEVER assign weight to a move against a type-immune target (shown as IMMUNE).
+4. Move data and MCTS stats are inputs to your reasoning — not a decision order.
 """
 
 
@@ -185,7 +222,6 @@ def _effectiveness_label(type_mult: float) -> str:
 def build_turn_prompt(view: GeminiBattleView) -> str:
     """Build the per-turn user prompt describing current battle state."""
     from fp.gemini.move_scorer import score_all_actions
-    from fp.opponent_profile import TeamArchetype
 
     lines = []
 

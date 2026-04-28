@@ -132,7 +132,7 @@ class _FoulPlayConfig:
         parser.add_argument(
             "--search-time-ms",
             type=int,
-            default=100,
+            default=300,
             help="Time to search per battle in milliseconds",
         )
         parser.add_argument(
