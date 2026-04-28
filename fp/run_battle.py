@@ -200,7 +200,29 @@ async def _gemini_pick_move(battle):
         logger.error("Gemini decision failed: %s: %s", type(exc).__name__, exc)
         logger.debug("Gemini traceback:\n%s", traceback.format_exc())
 
-        # Smart fallback: use the move scorer to pick the best action
+        # Fallback tier 1: sample from MCTS if we can run it quickly
+        try:
+            from fp.search.main import run_mcts_for_data
+            loop = asyncio.get_event_loop()
+            mcts_data = await asyncio.wait_for(
+                loop.run_in_executor(None, run_mcts_for_data, battle),
+                timeout=3.0,
+            )
+            if mcts_data and mcts_data.blended_policy:
+                sampled_move = max(
+                    mcts_data.blended_policy,
+                    key=mcts_data.blended_policy.get,
+                )
+                logger.info("[GEMINI FALLBACK] MCTS picked: %s", sampled_move)
+                active_name = battle.user.active.name if battle.user.active else "unknown"
+                battle.user.last_selected_move = LastUsedMove(
+                    active_name, sampled_move.replace("move ", "").split()[0], battle.turn,
+                )
+                return format_gemini_decision(battle, [{"decision": sampled_move, "slot": 0}])
+        except Exception as mcts_exc:
+            logger.warning("MCTS fallback also failed: %s", mcts_exc)
+
+        # Fallback tier 2: use the move scorer
         try:
             from fp.gemini.view import GeminiBattleView
             from fp.gemini.move_scorer import get_best_action
@@ -208,7 +230,9 @@ async def _gemini_pick_move(battle):
             best_decision = get_best_action(view)
             logger.info("[GEMINI FALLBACK] Scorer picked: %s", best_decision)
             active_name = battle.user.active.name if battle.user.active else "unknown"
-            battle.user.last_selected_move = LastUsedMove(active_name, best_decision.split()[-1], battle.turn)
+            battle.user.last_selected_move = LastUsedMove(
+                active_name, best_decision.split()[-1], battle.turn,
+            )
             return format_gemini_decision(battle, [{"decision": best_decision, "slot": 0}])
         except Exception as fallback_exc:
             logger.error("Scorer fallback also failed: %s", fallback_exc)
@@ -317,7 +341,29 @@ async def _claude_pick_move(battle):
         logger.error("Claude decision failed: %s: %s", type(exc).__name__, exc)
         logger.debug("Claude traceback:\n%s", traceback.format_exc())
 
-        # Smart fallback: use the move scorer to pick the best action
+        # Fallback tier 1: sample from MCTS if we can run it quickly
+        try:
+            from fp.search.main import run_mcts_for_data
+            loop = asyncio.get_event_loop()
+            mcts_data = await asyncio.wait_for(
+                loop.run_in_executor(None, run_mcts_for_data, battle),
+                timeout=3.0,
+            )
+            if mcts_data and mcts_data.blended_policy:
+                sampled_move = max(
+                    mcts_data.blended_policy,
+                    key=mcts_data.blended_policy.get,
+                )
+                logger.info("[CLAUDE FALLBACK] MCTS picked: %s", sampled_move)
+                active_name = battle.user.active.name if battle.user.active else "unknown"
+                battle.user.last_selected_move = LastUsedMove(
+                    active_name, sampled_move.replace("move ", "").split()[0], battle.turn,
+                )
+                return format_gemini_decision(battle, [{"decision": sampled_move, "slot": 0}])
+        except Exception as mcts_exc:
+            logger.warning("MCTS fallback also failed: %s", mcts_exc)
+
+        # Fallback tier 2: use the move scorer
         try:
             from fp.gemini.view import GeminiBattleView
             from fp.gemini.move_scorer import get_best_action
@@ -325,7 +371,9 @@ async def _claude_pick_move(battle):
             best_decision = get_best_action(view)
             logger.info("[CLAUDE FALLBACK] Scorer picked: %s", best_decision)
             active_name = battle.user.active.name if battle.user.active else "unknown"
-            battle.user.last_selected_move = LastUsedMove(active_name, best_decision.split()[-1], battle.turn)
+            battle.user.last_selected_move = LastUsedMove(
+                active_name, best_decision.split()[-1], battle.turn,
+            )
             return format_gemini_decision(battle, [{"decision": best_decision, "slot": 0}])
         except Exception as fallback_exc:
             logger.error("Scorer fallback also failed: %s", fallback_exc)
