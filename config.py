@@ -94,6 +94,13 @@ class _FoulPlayConfig:
     gemini_thinking_budget: int = 1024
     tutor_mode: bool = False
 
+    # DeepSeek integration
+    deepseek_api_key: Optional[str] = None
+    deepseek_model: str = "deepseek-v4-pro"
+    deepseek_tutor_model: str = "deepseek-v4-flash"
+    deepseek_thinking_budget: int = 4096
+    deepseek_reasoning_effort: str = "high"
+
     def configure(self):
         from pathlib import Path
         env_file = Path(__file__).parent / ".env"
@@ -181,7 +188,7 @@ class _FoulPlayConfig:
         parser.add_argument(
             "--decision-engine",
             default=os.environ.get("DECISION_ENGINE", "gemini"),
-            choices=["mcts", "gemini", "claude"],
+            choices=["mcts", "gemini", "claude", "deepseek"],
             help="Which decision engine to use (default: gemini)",
         )
         parser.add_argument(
@@ -247,6 +254,35 @@ class _FoulPlayConfig:
             help="Thinking token budget for Claude decisions (default: 4096, 0 to disable)",
         )
 
+        # DeepSeek integration
+        parser.add_argument(
+            "--deepseek-api-key",
+            default=os.environ.get("DEEPSEEK_API_KEY"),
+            help="DeepSeek API key (also reads DEEPSEEK_API_KEY env var)",
+        )
+        parser.add_argument(
+            "--deepseek-model",
+            default=os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"),
+            help="DeepSeek model name (default: deepseek-v4-pro)",
+        )
+        parser.add_argument(
+            "--deepseek-tutor-model",
+            default=os.environ.get("DEEPSEEK_TUTOR_MODEL", "deepseek-v4-flash"),
+            help="DeepSeek model for tutor chat (default: deepseek-v4-flash)",
+        )
+        parser.add_argument(
+            "--deepseek-thinking-budget",
+            type=int,
+            default=int(os.environ.get("DEEPSEEK_THINKING_BUDGET", "4096")),
+            help="Thinking token budget for DeepSeek decisions (default: 4096, 0 to disable)",
+        )
+        parser.add_argument(
+            "--deepseek-reasoning-effort",
+            default=os.environ.get("DEEPSEEK_REASONING_EFFORT", "high"),
+            choices=["low", "medium", "high", "max", "xhigh"],
+            help="DeepSeek reasoning effort level (default: high). low/medium map to high; xhigh maps to max.",
+        )
+
         args = parser.parse_args()
         
         if not args.ps_username:
@@ -287,6 +323,13 @@ class _FoulPlayConfig:
         self.claude_model = args.claude_model
         self.claude_tutor_model = args.claude_tutor_model
         self.claude_thinking_budget = args.claude_thinking_budget
+
+        # DeepSeek
+        self.deepseek_api_key = args.deepseek_api_key
+        self.deepseek_model = args.deepseek_model
+        self.deepseek_tutor_model = args.deepseek_tutor_model
+        self.deepseek_thinking_budget = args.deepseek_thinking_budget
+        self.deepseek_reasoning_effort = args.deepseek_reasoning_effort
 
         self.validate_config()
 
