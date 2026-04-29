@@ -29,6 +29,11 @@ def _use_claude(battle=None) -> bool:
     return FoulPlayConfig.decision_engine == "claude"
 
 
+def _use_deepseek(battle=None) -> bool:
+    """Check if DeepSeek engine should be used for the current decision."""
+    return FoulPlayConfig.decision_engine == "deepseek"
+
+
 def format_decision(battle, decision):
     # Formats a decision for communication with Pokemon-Showdown
     # If the move can be used as a Z-Move, it will be
@@ -134,7 +139,11 @@ def format_gemini_decision(battle, action_parts: list[dict]) -> list[str]:
 
             choice_parts.append(move_str)
         else:
-            choice_parts.append("move 1")  # fallback
+            # Assume bare token is a move ID (MCTS returns raw move names)
+            if tokens:
+                choice_parts.append("move {}".format(tokens[0]))
+            else:
+                choice_parts.append("move 1")
 
     message = "/choose " + ",".join(choice_parts)
     return [message, str(battle.rqid)]
@@ -161,6 +170,8 @@ async def async_pick_move(battle):
         return await _gemini_pick_move(battle)
     if _use_claude(battle):
         return await _claude_pick_move(battle)
+    if _use_deepseek(battle):
+        return await _deepseek_pick_move(battle)
 
     battle_copy = deepcopy(battle)
     if not battle_copy.team_preview:
@@ -253,6 +264,8 @@ async def handle_team_preview(battle, ps_websocket_client):
         return await _gemini_handle_team_preview(battle, ps_websocket_client)
     if _use_claude(battle):
         return await _claude_handle_team_preview(battle, ps_websocket_client)
+    if _use_deepseek(battle):
+        return await _deepseek_handle_team_preview(battle, ps_websocket_client)
 
     battle_copy = deepcopy(battle)
     battle_copy.user.active = Pokemon.get_dummy()
@@ -389,6 +402,80 @@ async def _claude_pick_move(battle):
         return ["/choose move 1", str(battle.rqid)]
 
 
+async def _deepseek_pick_move(battle):
+    """Dispatch decision to the DeepSeek engine."""
+    from fp.deepseek.decision import find_best_move_deepseek
+
+    try:
+        action_parts = await find_best_move_deepseek(battle)
+        logger.info("DeepSeek action_parts: %s", action_parts)
+        # Track last selected move for speed range checks
+        if action_parts and "decision" in action_parts[0]:
+            dec = action_parts[0]["decision"]
+            tokens = dec.split()
+            if tokens[0] == "move" and len(tokens) >= 2:
+                move_name = tokens[1]
+                active_name = battle.user.active.name if battle.user.active else "unknown"
+                battle.user.last_selected_move = LastUsedMove(
+                    active_name, move_name, battle.turn,
+                )
+        return format_gemini_decision(battle, action_parts)
+    except Exception as exc:
+        import traceback
+        logger.error("DeepSeek decision failed: %s: %s", type(exc).__name__, exc)
+        logger.debug("DeepSeek traceback:\n%s", traceback.format_exc())
+
+        # Fallback tier 1: sample from MCTS if we can run it quickly
+        try:
+            from fp.search.main import run_mcts_for_data
+            loop = asyncio.get_event_loop()
+            mcts_data = await asyncio.wait_for(
+                loop.run_in_executor(None, run_mcts_for_data, battle),
+                timeout=3.0,
+            )
+            if mcts_data and mcts_data.blended_policy:
+                sampled_move = max(
+                    mcts_data.blended_policy,
+                    key=mcts_data.blended_policy.get,
+                )
+                # MCTS keys are bare move IDs — prefix required for format_gemini_decision
+                if not sampled_move.startswith("move ") and not sampled_move.startswith("switch "):
+                    sampled_move = f"move {sampled_move}"
+                logger.info("[DEEPSEEK FALLBACK] MCTS picked: %s", sampled_move)
+                active_name = battle.user.active.name if battle.user.active else "unknown"
+                battle.user.last_selected_move = LastUsedMove(
+                    active_name, sampled_move.replace("move ", "").split()[0], battle.turn,
+                )
+                return format_gemini_decision(battle, [{"decision": sampled_move, "slot": 0}])
+        except Exception as mcts_exc:
+            logger.warning("MCTS fallback also failed: %s", mcts_exc)
+
+        # Fallback tier 2: use the move scorer
+        try:
+            from fp.gemini.view import GeminiBattleView
+            from fp.gemini.move_scorer import get_best_action
+            view = GeminiBattleView.from_battle(battle)
+            best_decision = get_best_action(view)
+            logger.info("[DEEPSEEK FALLBACK] Scorer picked: %s", best_decision)
+            active_name = battle.user.active.name if battle.user.active else "unknown"
+            battle.user.last_selected_move = LastUsedMove(
+                active_name, best_decision.split()[-1], battle.turn,
+            )
+            return format_gemini_decision(battle, [{"decision": best_decision, "slot": 0}])
+        except Exception as fallback_exc:
+            logger.error("Scorer fallback also failed: %s", fallback_exc)
+
+        # Last resort: force-switch or move 1
+        if battle.request_json and battle.request_json.get("forceSwitch"):
+            side_pokemon = battle.request_json.get("side", {}).get("pokemon", [])
+            for i, p in enumerate(side_pokemon):
+                cond = p.get("condition", "")
+                if "fnt" not in cond and not p.get("active", False):
+                    return [f"/choose switch {i + 1}", str(battle.rqid)]
+        logger.info("[DEEPSEEK EXHAUSTED] All fallbacks failed. Defaulting to move 1.")
+        return ["/choose move 1", str(battle.rqid)]
+
+
 async def _claude_handle_team_preview(battle, ps_websocket_client):
     """Claude-powered team preview: pick leads using the AI."""
     from fp.claude.decision import find_best_move_claude
@@ -417,6 +504,41 @@ async def _claude_handle_team_preview(battle, ps_websocket_client):
 
     except Exception as exc:
         logger.error("Claude team preview failed: %s — using default order", exc)
+        size_of_team = len(battle.user.reserve) + 1
+        order = "".join(str(i) for i in range(1, size_of_team))
+        message = ["/team {}|{}".format(order, battle.rqid)]
+        await ps_websocket_client.send_message(battle.battle_tag, message)
+
+    finally:
+        battle.team_preview = False
+
+
+async def _deepseek_handle_team_preview(battle, ps_websocket_client):
+    """DeepSeek-powered team preview: pick leads using the AI."""
+    from fp.deepseek.decision import find_best_move_deepseek
+
+    battle.team_preview = True
+    battle.request_json["teamPreview"] = True
+
+    try:
+        action_parts = await find_best_move_deepseek(battle)
+        logger.info("DeepSeek team preview: %s", action_parts)
+
+        if action_parts and "team_order" in action_parts[0]:
+            order = action_parts[0]["team_order"]
+            message = ["/team {}|{}".format(order, battle.rqid)]
+        else:
+            size_of_team = len(battle.user.reserve) + 1
+            order = "".join(str(i) for i in range(1, size_of_team))
+            message = ["/team {}|{}".format(order, battle.rqid)]
+
+        battle.user.last_selected_move = LastUsedMove(
+            "teampreview", "deepseek-lead-{}".format(order[:1]), battle.turn
+        )
+        await ps_websocket_client.send_message(battle.battle_tag, message)
+
+    except Exception as exc:
+        logger.error("DeepSeek team preview failed: %s — using default order", exc)
         size_of_team = len(battle.user.reserve) + 1
         order = "".join(str(i) for i in range(1, size_of_team))
         message = ["/team {}|{}".format(order, battle.rqid)]
@@ -513,6 +635,8 @@ async def start_random_battle(
         await _attach_gemini_context(battle, ps_websocket_client)
     elif _use_claude():
         await _attach_claude_context(battle, ps_websocket_client)
+    elif _use_deepseek():
+        await _attach_deepseek_context(battle, ps_websocket_client)
 
     # apply the messages that were held onto
     process_battle_updates(battle)
@@ -625,6 +749,8 @@ async def start_battle(ps_websocket_client, pokemon_battle_type, team_dict):
         await _attach_gemini_context(battle, ps_websocket_client)
     elif _use_claude() and battle.format_info is None:
         await _attach_claude_context(battle, ps_websocket_client)
+    elif _use_deepseek() and battle.format_info is None:
+        await _attach_deepseek_context(battle, ps_websocket_client)
 
     await ps_websocket_client.send_message(battle.battle_tag, ["hf"])
     await ps_websocket_client.send_message(battle.battle_tag, ["/timer on"])
@@ -733,6 +859,45 @@ async def _attach_claude_context(battle, ps_websocket_client):
     # Tutor session (Claude)
     if FoulPlayConfig.tutor_mode:
         from fp.claude.tutor import TutorSession
+
+        battle.tutor_session = TutorSession(FoulPlayConfig.username)
+        greeting = await battle.tutor_session.on_battle_start(
+            battle.format_info.format_name, battle.format_rules_text
+        )
+        if greeting:
+            await _send_tutor_chat(ps_websocket_client, battle.battle_tag, greeting)
+
+
+async def _attach_deepseek_context(battle, ps_websocket_client):
+    """Attach format_info, verified rules, and optional tutor session to battle (DeepSeek engine)."""
+    from fp.gemini.format_detection import detect_format_info
+    from fp.gemini.format_rules import get_rule_card
+
+    battle.format_info = detect_format_info(
+        battle.pokemon_format, battle.request_json
+    )
+
+    rule_card = get_rule_card(battle.format_info.gen, battle.format_info.format_name)
+
+    # Verify rules via DeepSeek training knowledge (no web search)
+    try:
+        from fp.deepseek.format_research import verify_format_rules
+        from fp.deepseek.client import get_client, get_model_name
+
+        client = get_client(api_key_override=FoulPlayConfig.deepseek_api_key)
+        battle.format_rules_text = await verify_format_rules(
+            client, get_model_name(), battle.format_info, rule_card
+        )
+        logger.info("Format rules verified and attached (DeepSeek)")
+    except Exception as exc:
+        logger.warning("Rule verification failed, using stored card: %s", exc)
+        battle.format_rules_text = rule_card
+
+    battle.format_meta_context = ""
+
+    # Tutor session (DeepSeek)
+    if FoulPlayConfig.tutor_mode:
+        from fp.deepseek.tutor import TutorSession
 
         battle.tutor_session = TutorSession(FoulPlayConfig.username)
         greeting = await battle.tutor_session.on_battle_start(
