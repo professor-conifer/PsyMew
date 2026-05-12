@@ -1,178 +1,121 @@
 # PsyMew ![mew](https://play.pokemonshowdown.com/sprites/xyani/mew.gif)
 
-A competitive Pokémon battle-bot for [Pokemon Showdown](https://pokemonshowdown.com/) powered by **Google Gemini** or **Anthropic Claude**.
+A competitive Pokémon battle bot for [Pokémon Showdown](https://pokemonshowdown.com/) powered by **Anthropic Claude**, **Google Gemini**, or **DeepSeek V4** — with a native Rust MCTS fallback when LLMs are unavailable.
 
-PsyMew uses large language models as its decision engine — it reads the full battle state, reasons about type matchups, damage calcs, speed tiers, and win conditions, then picks the best move via function calling. It supports every format: singles, doubles (WIP), VGC, random battles, and more across all generations. Feel free to contribute to the project!
+PsyMew reads the full battle state, reasons about type matchups, damage calcs, speed tiers, and win conditions, then picks the best move via structured tool use. It supports every generation (Gen 1–9) and the major rulesets: singles, doubles (WIP), VGC, random battles, OU/UU/Ubers, and more.
 
-> Fork of [Foul Play](https://github.com/pmariglia/foul-play) with a complete AI overhaul to the decision making battle engine.
+> Fork of [Foul Play](https://github.com/pmariglia/foul-play) with a complete AI overhaul to the decision-making engine.
 
-[Join the PsyMew Discord Community!](https://discord.gg/N34QduHdUP)
+📖 **Full documentation lives on the [Wiki](https://github.com/professor-conifer/PsyMew/wiki).** 💬 [Join the Discord.](https://discord.gg/N34QduHdUP)
+
 ---
 
 ## Features
 
-- **AI-powered decisions** — Gemini or Claude reads the full battle context and picks moves via structured tool use
-- **Full battle awareness** — Turn-by-turn history, type effectiveness, damage estimates, speed ranges
-- **Strategic reasoning** — Matchup analysis, switching prediction, stall breaking, endgame plays
-- **Tutor Mode (WIP)** — The bot coaches you in chat: greets opponents, comments on turns, gives post-game reviews
-- **Format verification** — Live web search to verify metagame rules at the start of each battle
-- **Smart fallback** — MCTS engine kicks in automatically if the AI is rate-limited or unavailable
-- **Multi-auth** — Google OAuth, API keys, Claude Code OAuth (Pro/Max), or Application Default Credentials
+- **Configuration GUI** — one window with prereq detection, API-key testing, server presets, and Start/Stop. New users can clone-and-run without touching a `.env` file.
+- **AI-powered decisions** — Claude, Gemini, or DeepSeek reads the full battle context and picks moves via structured function calling.
+- **Full battle awareness** — turn-by-turn history, type effectiveness, damage estimates, speed ranges.
+- **Strategic reasoning** — matchup analysis, switch prediction, stall breaking, endgame plays.
+- **Tutor Mode (WIP)** — the bot coaches you in chat: greets opponents, comments on turns, gives post-game reviews.
+- **Smart fallback** — the native MCTS engine kicks in automatically when the LLM is rate-limited or unavailable.
 
-## Decision Engines
+## Decision engines
 
-| Engine | Description |
+| Engine | What it is |
 |--------|-------------|
-| **Gemini** (default) | Google Gemini 2.5 Pro with function calling |
-| **Claude** | Anthropic Claude Sonnet 4 with tool use |
-| **MCTS** | [poke-engine](https://github.com/pmariglia/poke-engine) Monte Carlo Tree Search |
+| **Claude** *(default in `.env-example`)* | Anthropic Claude with extended-thinking tool use |
+| **Gemini** | Google Gemini Pro with function calling |
+| **DeepSeek** | DeepSeek V4 reasoning model (OpenAI-compatible API) |
+| **MCTS** | Native Rust [poke-engine](https://github.com/pmariglia/poke-engine) Monte Carlo Tree Search — no API key needed |
 
-Set the engine in your `.env`:
-```ini
-DECISION_ENGINE=claude   # or claude, mcts
-```
+Pick one in the GUI's **AI** tab, or set `DECISION_ENGINE=` in `.env`.
 
 ---
 
-## Quick Start
+## Quick start
 
 ### Prerequisites
 
-| Tool | Why | Install |
-|------|-----|---------|
-| **Python 3.11+** | Runtime | [python.org](https://www.python.org/downloads/) — **check "Add to PATH" on Windows** |
-| **Rust** | Builds the MCTS engine | [rustup.rs](https://rustup.rs/) |
-| **C++ Build Tools** (Windows) | Native compilation | [VS Build Tools](https://aka.ms/vs/17/release/vs_BuildTools.exe) — select "Desktop development with C++" |
+| Tool | Why |
+|------|-----|
+| **Python 3.11+** | Runtime |
+| **Rust** *(optional — only for the MCTS engine)* | Compiles `poke-engine` from source |
+| **C++ Build Tools** *(Windows only, optional)* | Same — only needed if you compile MCTS locally |
 
-### Setup
+The GUI's **Setup tab** detects all of these and offers one-click installers (via `winget` on Windows). You can skip the manual install steps.
+
+### Run the GUI
 
 ```bash
-# 1. Clone the repo
-git clone https://github.com/YOUR_USERNAME/PsyMew.git
+git clone https://github.com/professor-conifer/PsyMew.git
 cd PsyMew
+python psymew_gui.py
+```
 
-# 2. Install dependencies (takes 1-2 min to compile the engine)
-pip install -r requirements.txt
+The window opens on the **Setup** tab. It scans your machine, lights up green for what's already installed, and gives you install buttons for anything missing. When the lights are green, click **Continue to bot setup →** and walk through Account → Battle → AI → Advanced → Run.
 
-# 3. Create your config
+A deeper tour of every tab lives at [`docs/gui-overview.md`](docs/gui-overview.md) and on the [Wiki](https://github.com/professor-conifer/PsyMew/wiki/GUI-Overview).
+
+### Run from the terminal (power-user path)
+
+```bash
 cp .env-example .env
-# Edit .env with your Showdown username/password
-
-# 4. Connect to your AI (pick one)
-
-# Option A: Gemini (recommended for Google AI Pro subscribers)
-python gemini_login.py
-
-# Option B: Claude (recommended for Claude Pro/Max subscribers)
-python claude_login.py
-
-# Option C: API key
-# Add GEMINI_API_KEY=... or ANTHROPIC_API_KEY=... to .env
-
-# 5. Run
+# edit .env: set PS_USERNAME, PS_PASSWORD, DECISION_ENGINE, and the matching API key
+pip install -r requirements.txt
 python start.py
 ```
 
-Challenge your bot on Showdown and watch it play!
+API keys are issued at:
 
-### `.env` Configuration
+- Claude — <https://console.anthropic.com/settings/keys>
+- Gemini — <https://aistudio.google.com/apikey>
+- DeepSeek — <https://platform.deepseek.com/api_keys>
 
-```ini
-PS_USERNAME=your_bot_name
-PS_PASSWORD=your_password
-PS_BOT_MODE=accept_challenge
-PS_FORMAT=gen9randombattle
-# TUTOR_MODE=0   // Should be disabled by default unless you are a developer since it does not work properly yet
-
-# AI engine (gemini, claude, or mcts)
-DECISION_ENGINE=claude
-
-# Gemini auth (if not using OAuth)
-# GEMINI_API_KEY=your_key
-
-# Claude auth (if not using Claude Code OAuth)
-# ANTHROPIC_API_KEY=your_key
-```
+`python claude_login.py` / `python gemini_login.py` are interactive helpers that test a key and write it into `.env` for you.
 
 ---
 
-## Authentication
+## Servers & mirrors
 
-### Gemini
-
-| Priority | Mode | How |
-|----------|------|-----|
-| 1 | OAuth | `python gemini_login.py` — uses your Google AI Pro subscription |
-| 2 | API key | `GEMINI_API_KEY` in `.env` |
-| 3 | Access token | `GEMINI_ACCESS_TOKEN` env var |
-| 4 | ADC | `gcloud` Application Default Credentials |
-
-### Claude
-
-| Priority | Mode | How |
-|----------|------|-----|
-| 1 | OAuth | Auto-detects [Claude Code](https://code.claude.com) credentials — uses your Pro/Max subscription |
-| 2 | API key | `ANTHROPIC_API_KEY` in `.env` |
-
-Run `python claude_login.py` to set up. If you have [Claude Code](https://code.claude.com) installed and logged in, credentials are auto-detected — no extra setup needed.
+PsyMew connects to the official `play.pokemonshowdown.com` server by default. It also works with mirrors — pick a preset in the GUI's **Advanced → Showdown server** dropdown, or set `PS_WEBSOCKET_URI` + `PS_LOGIN_URI` in `.env`. See the [Custom Servers wiki page](https://github.com/professor-conifer/PsyMew/wiki/Custom-Servers) and the dedicated [PokéAgent Challenge wiki page](https://github.com/professor-conifer/PsyMew/wiki/PokeAgent-Challenge) for setup walkthroughs.
 
 ---
 
 ## Docker
 
 ```bash
-# Build
 docker build -t psymew:latest .
-
-# Run with .env file
 docker run --rm --network host --env-file .env psymew:latest
-
-# Gemini OAuth (mount credentials)
-docker run --rm --network host \
-  -v ~/.psymew:/root/.psymew:ro \
-  --env-file .env \
-  psymew:latest
-
-# Claude OAuth (mount credentials)
-docker run --rm --network host \
-  -v ~/.claude:/root/.claude:ro \
-  --env-file .env \
-  psymew:latest
 ```
+
+API keys are read from `.env` — no credential volumes to mount.
 
 ---
 
-## MCTS Engine
+## CLI reference
 
-PsyMew includes [poke-engine](https://github.com/pmariglia/poke-engine) as a fallback MCTS engine. It activates automatically when the AI is unavailable, or you can use it directly:
-
-```ini
-DECISION_ENGINE=mcts
-```
-
-The engine compiles from source (requires Rust). To rebuild for a different generation:
-
-```bash
-pip uninstall -y poke-engine && pip install -v --force-reinstall --no-cache-dir \
-  poke-engine --config-settings="build-args=--features poke-engine/gen4 --no-default-features"
-```
-
-See the [poke-engine docs](https://poke-engine.readthedocs.io/en/latest/) for details.
-
----
-
-## CLI Reference
-
-All settings can also be passed as flags. Run `python start.py --help` for the full list.
+All GUI settings are also `start.py` flags. `python start.py --help` lists them. Example:
 
 ```bash
 python start.py \
   --ps-username MyBot \
   --ps-password secret \
   --decision-engine claude \
+  --claude-api-key sk-ant-… \
   --pokemon-format gen9ou \
   --bot-mode search_ladder
 ```
+
+---
+
+## How the process model works (quick reference)
+
+Running PsyMew spawns **two** Python processes by design:
+
+1. The **bot** (`showdown.py`) — plays the battle.
+2. A **detached loader** that keeps the native Rust battle engine cached in memory across runs.
+
+The GUI's launch closes the bot's console window to stop it; the loader is deliberately left alive so the next Start is faster. Restart the GUI to clean up accumulated loaders. The full explanation is on the [Wiki FAQ](https://github.com/professor-conifer/PsyMew/wiki/FAQ).
 
 ---
 

@@ -366,7 +366,6 @@ async def find_best_move_gemini(battle) -> list[dict]:
 
     # --- Build prompts ---
     client = get_client(
-        auth_mode=FoulPlayConfig.gemini_auth_mode,
         api_key_override=FoulPlayConfig.gemini_api_key,
     )
     model = get_model_name()

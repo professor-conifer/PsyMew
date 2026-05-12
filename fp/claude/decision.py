@@ -320,7 +320,6 @@ async def find_best_move_claude(battle) -> list[dict]:
 
     # --- Build prompts ---
     client = get_async_client(
-        auth_mode=FoulPlayConfig.claude_auth_mode,
         api_key_override=FoulPlayConfig.claude_api_key,
     )
     model = get_model_name()

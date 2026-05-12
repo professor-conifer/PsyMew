@@ -793,7 +793,6 @@ async def _attach_gemini_context(battle, ps_websocket_client):
         from fp.gemini.client import get_client, get_model_name
 
         client = get_client(
-            auth_mode=FoulPlayConfig.gemini_auth_mode,
             api_key_override=FoulPlayConfig.gemini_api_key,
         )
         model_name = get_model_name()
@@ -845,7 +844,6 @@ async def _attach_claude_context(battle, ps_websocket_client):
         from fp.claude.client import get_async_client, get_model_name
 
         client = get_async_client(
-            auth_mode=FoulPlayConfig.claude_auth_mode,
             api_key_override=FoulPlayConfig.claude_api_key,
         )
         battle.format_rules_text = await verify_format_rules(

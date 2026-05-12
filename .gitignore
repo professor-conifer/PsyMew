@@ -1,20 +1,46 @@
-logs/
-.venv/
-venv/
-dist/
-.idea/
-**/actual_states/*
-**/__pycache__/*
-creds
-*.xlsx
-*.txt
-!requirements*.txt
-suspect_decisions.py
-teams/teams
-data/smogon_stats_cache
-data/pkmn_sets_cache
-data/local_data
+# ---- Local secrets & user-specific data -----------------------------
 .env
 .gemini/
 .claude/
 .psymew/
+creds
+
+# ---- Python build / cache artifacts ---------------------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# ---- Virtual environments -------------------------------------------
+.venv/
+venv/
+
+# ---- Editor / IDE noise ---------------------------------------------
+.idea/
+.vscode/
+
+# ---- PsyMew runtime artifacts ---------------------------------------
+logs/
+suspect_decisions.py
+**/actual_states/*
+
+# Caches the bot generates at runtime
+data/smogon_stats_cache
+data/pkmn_sets_cache
+data/local_data
+
+# User-supplied team files live here — these are personal
+teams/teams
+
+# ---- Generic data files we don't want tracked accidentally ---------
+*.xlsx
+*.txt
+# ...except the requirements pins
+!requirements*.txt
+# ...and the docs / contribution files
+!docs/**/*.txt

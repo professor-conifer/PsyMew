@@ -69,7 +69,6 @@ class TutorSession:
         if self._client is None:
             from config import FoulPlayConfig
             self._client = get_async_client(
-                auth_mode=FoulPlayConfig.claude_auth_mode,
                 api_key_override=FoulPlayConfig.claude_api_key,
             )
             self._model = getattr(FoulPlayConfig, "claude_tutor_model", "claude-sonnet-4-6")
