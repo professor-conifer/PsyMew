@@ -8,6 +8,8 @@ PsyMew reads the full battle state, reasons about type matchups, damage calcs, s
 
 📖 **Full documentation lives on the [Wiki](https://github.com/professor-conifer/PsyMew/wiki).** 💬 [Join the Discord.](https://discord.gg/N34QduHdUP)
 
+![PsyMew configuration GUI](https://i.imgur.com/YC8IuAj.png)
+
 ---
 
 ## Features
