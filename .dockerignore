@@ -1,1 +1,36 @@
+# Runtime artifacts the bot creates locally; the container starts clean.
 ./logs
+
+# ---- Source control / local-only bits -------------------------------
+.git
+.gitignore
+.dockerignore
+.idea
+.vscode
+.env
+
+# ---- Python build / cache -------------------------------------------
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.ruff_cache
+.venv
+venv
+build
+dist
+*.egg-info
+
+# ---- Desktop-only bits not needed by a headless container ----------
+# The Docker image runs the CLI bot (start.py). The configuration GUI
+# uses Tkinter which isn't useful inside a headless image.
+gui
+psymew_gui.py
+
+# ---- Docs and tests aren't needed at runtime -----------------------
+docs
+tests
+Makefile
+README.md
+LICENSE

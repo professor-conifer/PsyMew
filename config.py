@@ -63,8 +63,19 @@ class BotModes(Enum):
     search_ladder = auto()
 
 
+_ENGINE_KEY_ENVS = {
+    "claude": ("ANTHROPIC_API_KEY",),
+    "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+    "deepseek": ("DEEPSEEK_API_KEY",),
+}
+
+
 class _FoulPlayConfig:
     websocket_uri: str
+    # Optional override for the Showdown login endpoint. Empty string means
+    # "use the default play.pokemonshowdown.com". Mirrors (PokéAgent
+    # Challenge, private servers) typically need their own action.php URL.
+    login_uri: str = ""
     username: str
     password: str | None
     user_id: str
@@ -88,11 +99,16 @@ class _FoulPlayConfig:
     # Gemini integration
     decision_engine: str = "gemini"
     gemini_api_key: Optional[str] = None
-    gemini_auth_mode: str = "auto"
     gemini_model: str = "gemini-3.1-pro-preview"
     gemini_tutor_model: str = "gemini-2.0-flash"
     gemini_thinking_budget: int = 1024
     tutor_mode: bool = False
+
+    # Claude integration
+    claude_api_key: Optional[str] = None
+    claude_model: str = "claude-sonnet-4-6"
+    claude_tutor_model: str = "claude-sonnet-4-6"
+    claude_thinking_budget: int = 4096
 
     # DeepSeek integration
     deepseek_api_key: Optional[str] = None
@@ -111,11 +127,32 @@ class _FoulPlayConfig:
                     key, val = line.split("=", 1)
                     os.environ.setdefault(key.strip(), val.strip().strip("'\""))
 
+        def env_int(name: str, default: int) -> int:
+            raw = os.environ.get(name)
+            if raw is None or raw == "":
+                return default
+            try:
+                return int(raw)
+            except ValueError:
+                return default
+
+        def env_truthy(name: str) -> bool:
+            return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
         parser = argparse.ArgumentParser()
         parser.add_argument(
             "--websocket-uri",
             default=os.environ.get("PS_WEBSOCKET_URI", "wss://sim3.psim.us/showdown/websocket"),
             help="The PokemonShowdown websocket URI, e.g. wss://sim3.psim.us/showdown/websocket",
+        )
+        parser.add_argument(
+            "--login-uri",
+            default=os.environ.get("PS_LOGIN_URI", ""),
+            help=(
+                "Override the Showdown login URL (action.php). Use this for mirrors "
+                "like PokéAgent Challenge that authenticate against their own server. "
+                "Leave blank for the default play.pokemonshowdown.com."
+            ),
         )
         parser.add_argument("--ps-username", default=os.environ.get("PS_USERNAME"))
         parser.add_argument("--ps-password", default=os.environ.get("PS_PASSWORD", None))
@@ -133,58 +170,63 @@ class _FoulPlayConfig:
         )
         parser.add_argument(
             "--smogon-stats-format",
-            default=None,
+            default=os.environ.get("PS_SMOGON_STATS"),
             help="Overwrite which smogon stats are used to infer unknowns. If not set, defaults to the --pokemon-format value.",
         )
         parser.add_argument(
             "--search-time-ms",
             type=int,
-            default=300,
+            default=env_int("PS_SEARCH_TIME_MS", 300),
             help="Time to search per battle in milliseconds",
         )
         parser.add_argument(
             "--search-parallelism",
             type=int,
-            default=1,
+            default=env_int("PS_SEARCH_PARALLELISM", 1),
             help="Number of states to search in parallel",
         )
         parser.add_argument(
             "--run-count",
             type=int,
-            default=1,
+            default=env_int("PS_RUN_COUNT", 1),
             help="Number of PokemonShowdown battles to run",
         )
         parser.add_argument(
             "--team-name",
-            default=None,
+            default=os.environ.get("PS_TEAM_NAME"),
             help="Which team to use. Can be a filename or a foldername relative to ./teams/teams/. "
             "If a foldername, a random team from that folder will be chosen each battle. "
             "If not set, defaults to the --pokemon-format value.",
         )
         parser.add_argument(
             "--team-list",
-            default=None,
+            default=os.environ.get("PS_TEAM_LIST"),
             help="A path to a text file containing a list of team names to choose from in order. Takes precedence over --team-name.",
         )
         parser.add_argument(
             "--save-replay",
-            default="never",
+            default=os.environ.get("PS_SAVE_REPLAY", "never"),
             choices=[e.name for e in SaveReplay],
             help="When to save replays",
         )
         parser.add_argument(
             "--room-name",
-            default=None,
+            default=os.environ.get("PS_ROOM_NAME"),
             help="If bot_mode is `accept_challenge`, the room to join while waiting",
         )
-        parser.add_argument("--log-level", default="DEBUG", help="Python logging level")
+        parser.add_argument(
+            "--log-level",
+            default=os.environ.get("PS_LOG_LEVEL", "DEBUG"),
+            help="Python logging level",
+        )
         parser.add_argument(
             "--log-to-file",
             action="store_true",
+            default=env_truthy("PS_LOG_TO_FILE"),
             help="When enabled, DEBUG logs will be written to a file in the logs/ directory",
         )
 
-        # Gemini integration
+        # Decision engine + LLM auth (API key only)
         parser.add_argument(
             "--decision-engine",
             default=os.environ.get("DECISION_ENGINE", "gemini"),
@@ -192,44 +234,40 @@ class _FoulPlayConfig:
             help="Which decision engine to use (default: gemini)",
         )
         parser.add_argument(
-            "--gemini-api-key",
-            default=None,
-            help="Gemini API key (also reads GEMINI_API_KEY env var)",
+            "--tutor-mode",
+            action="store_true",
+            default=env_truthy("TUTOR_MODE"),
+            help="Enable chatty tutor mode (post-turn coaching and chat replies)",
         )
+
+        # Gemini
         parser.add_argument(
-            "--gemini-auth-mode",
-            default=os.environ.get("GEMINI_AUTH_MODE", "auto"),
-            choices=["auto", "api_key", "access_token", "adc", "oauth"],
-            help="Gemini auth mode. 'oauth' uses Google login (run `python gemini_login.py` to set up). Default 'auto' tries oauth first. (default: auto)",
+            "--gemini-api-key",
+            default=os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"),
+            help="Gemini API key (also reads GEMINI_API_KEY / GOOGLE_API_KEY env vars)",
         )
         parser.add_argument(
             "--gemini-model",
-            default="gemini-3.1-pro-preview",
+            default=os.environ.get("GEMINI_MODEL", "gemini-3.1-pro-preview"),
             help="Gemini model name (default: gemini-3.1-pro-preview)",
         )
         parser.add_argument(
             "--gemini-tutor-model",
-            default="gemini-2.0-flash",
-            help="Gemini model for tutor chat (default: gemini-2.0-flash, no thinking tokens)",
+            default=os.environ.get("GEMINI_TUTOR_MODEL", "gemini-2.0-flash"),
+            help="Gemini model for tutor chat (default: gemini-2.0-flash)",
         )
         parser.add_argument(
-            "--tutor-mode",
-            action="store_true",
-            default=os.environ.get("TUTOR_MODE") == "1",
-            help="Enable chatty tutor mode (post-turn coaching and chat replies)",
+            "--gemini-thinking-budget",
+            type=int,
+            default=env_int("GEMINI_THINKING_BUDGET", 4096),
+            help="Thinking token budget for Gemini decisions (default: 4096, 0 to disable)",
         )
 
-        # Claude integration
+        # Claude
         parser.add_argument(
             "--claude-api-key",
             default=os.environ.get("ANTHROPIC_API_KEY"),
             help="Anthropic API key (also reads ANTHROPIC_API_KEY env var)",
-        )
-        parser.add_argument(
-            "--claude-auth-mode",
-            default=os.environ.get("CLAUDE_AUTH_MODE", "auto"),
-            choices=["auto", "api_key", "oauth"],
-            help="Claude auth mode. 'oauth' reuses Claude Code credentials. Default 'auto' tries oauth first. (default: auto)",
         )
         parser.add_argument(
             "--claude-model",
@@ -242,19 +280,13 @@ class _FoulPlayConfig:
             help="Claude model for tutor chat (default: claude-sonnet-4-6)",
         )
         parser.add_argument(
-            "--gemini-thinking-budget",
-            type=int,
-            default=int(os.environ.get("GEMINI_THINKING_BUDGET", "4096")),
-            help="Thinking token budget for Gemini decisions (default: 4096, 0 to disable)",
-        )
-        parser.add_argument(
             "--claude-thinking-budget",
             type=int,
-            default=int(os.environ.get("CLAUDE_THINKING_BUDGET", "4096")),
+            default=env_int("CLAUDE_THINKING_BUDGET", 4096),
             help="Thinking token budget for Claude decisions (default: 4096, 0 to disable)",
         )
 
-        # DeepSeek integration
+        # DeepSeek
         parser.add_argument(
             "--deepseek-api-key",
             default=os.environ.get("DEEPSEEK_API_KEY"),
@@ -273,7 +305,7 @@ class _FoulPlayConfig:
         parser.add_argument(
             "--deepseek-thinking-budget",
             type=int,
-            default=int(os.environ.get("DEEPSEEK_THINKING_BUDGET", "4096")),
+            default=env_int("DEEPSEEK_THINKING_BUDGET", 4096),
             help="Thinking token budget for DeepSeek decisions (default: 4096, 0 to disable)",
         )
         parser.add_argument(
@@ -284,13 +316,14 @@ class _FoulPlayConfig:
         )
 
         args = parser.parse_args()
-        
+
         if not args.ps_username:
             print("\nError: Showdown username is required!")
-            print("Please create a `.env` file with `PS_USERNAME=your_username` or use `--ps-username`.\n")
+            print("Set PS_USERNAME in `.env`, pass --ps-username, or open the GUI: `python psymew_gui.py`\n")
             sys.exit(1)
-            
+
         self.websocket_uri = args.websocket_uri
+        self.login_uri = (args.login_uri or "").strip()
         self.username = args.ps_username
         self.password = args.ps_password
         self.avatar = args.ps_avatar
@@ -308,18 +341,18 @@ class _FoulPlayConfig:
         self.log_level = args.log_level
         self.log_to_file = args.log_to_file
 
-        # Gemini
+        # Decision engine + shared flags
         self.decision_engine = args.decision_engine
+        self.tutor_mode = args.tutor_mode
+
+        # Gemini
         self.gemini_api_key = args.gemini_api_key
-        self.gemini_auth_mode = args.gemini_auth_mode
         self.gemini_model = args.gemini_model
         self.gemini_tutor_model = args.gemini_tutor_model
         self.gemini_thinking_budget = args.gemini_thinking_budget
-        self.tutor_mode = args.tutor_mode
 
         # Claude
         self.claude_api_key = args.claude_api_key
-        self.claude_auth_mode = args.claude_auth_mode
         self.claude_model = args.claude_model
         self.claude_tutor_model = args.claude_tutor_model
         self.claude_thinking_budget = args.claude_thinking_budget
@@ -344,51 +377,29 @@ class _FoulPlayConfig:
                 self.user_to_challenge is not None
             ), "If bot_mode is `CHALLENGE_USER`, you must declare USER_TO_CHALLENGE"
 
-        if self.decision_engine == "gemini" or self.tutor_mode:
-            has_key = self.gemini_api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-            has_token = os.environ.get("GEMINI_ACCESS_TOKEN")
-            has_adc = any(
-                os.path.isfile(p)
-                for p in self._adc_paths()
-            )
-            has_oauth = any(
-                os.path.isfile(str(p))
-                for p in self._oauth_paths()
-            )
-            if not (has_key or has_token or has_adc or has_oauth):
-                logger = logging.getLogger(__name__)
-                logger.warning(
-                    "Gemini credentials not detected. Run `gemini` CLI and 'Login with Google', "
-                    "or run `python gemini_login.py` to set up. "
-                    "Bot will fail at runtime if no credentials are available."
-                )
+        logger = logging.getLogger(__name__)
+        engine = self.decision_engine
+        if engine == "mcts":
+            return
 
-    @staticmethod
-    def _adc_paths() -> list:
-        import pathlib
-        paths = []
-        explicit = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
-        if explicit:
-            paths.append(explicit)
-        paths.append(str(pathlib.Path.home() / ".config" / "gcloud" / "application_default_credentials.json"))
-        appdata = os.environ.get("APPDATA", "").strip()
-        if appdata:
-            paths.append(str(pathlib.Path(appdata) / "gcloud" / "application_default_credentials.json"))
-        return paths
+        key_envs = _ENGINE_KEY_ENVS.get(engine, ())
+        attr_key = {
+            "claude": self.claude_api_key,
+            "gemini": self.gemini_api_key,
+            "deepseek": self.deepseek_api_key,
+        }.get(engine)
 
-    @staticmethod
-    def _oauth_paths() -> list:
-        import pathlib
-        paths = []
-        explicit = os.environ.get("GEMINI_OAUTH_CREDS_FILE", "").strip()
-        if explicit:
-            paths.append(explicit)
-        home = pathlib.Path.home()
-        paths.append(str(home / ".gemini" / "oauth_creds.json"))
-        userprofile = os.environ.get("USERPROFILE", "").strip()
-        if userprofile:
-            paths.append(str(pathlib.Path(userprofile) / ".gemini" / "oauth_creds.json"))
-        return paths
+        has_key = bool((attr_key or "").strip()) or any(
+            os.environ.get(name, "").strip() for name in key_envs
+        )
+        if not has_key:
+            env_hint = " / ".join(key_envs) if key_envs else "(no env var)"
+            logger.warning(
+                "%s API key not detected. Set %s in your .env file or open the GUI: "
+                "`python psymew_gui.py`. The bot will fail at runtime without a valid key.",
+                engine.capitalize(),
+                env_hint,
+            )
 
 
 FoulPlayConfig = _FoulPlayConfig()

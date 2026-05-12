@@ -32,8 +32,13 @@ COPY --from=build /packages/ /usr/local/lib/python3.13/site-packages/
 
 ENV PYTHONIOENCODING=utf-8
 
-# Gemini API key (pass via docker run -e GEMINI_API_KEY=...)
-# For ADC auth, mount credentials: -v ~/.config/gcloud:/root/.config/gcloud:ro
+# Pass API keys via docker run -e (or use --env-file .env):
+#   -e DECISION_ENGINE=claude -e ANTHROPIC_API_KEY=...
+#   -e DECISION_ENGINE=gemini -e GEMINI_API_KEY=...
+#   -e DECISION_ENGINE=deepseek -e DEEPSEEK_API_KEY=...
+ENV DECISION_ENGINE=""
+ENV ANTHROPIC_API_KEY=""
 ENV GEMINI_API_KEY=""
+ENV DEEPSEEK_API_KEY=""
 
 ENTRYPOINT ["python3", "start.py"]

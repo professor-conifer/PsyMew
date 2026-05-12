@@ -25,19 +25,31 @@ class PSWebsocketClient:
     password = None
     last_message = None
     last_challenge_time = 0
+    # True when login_uri came from an override (mirror like PokéAgent
+    # Challenge). Mirrors expose only the legacy `action.php` protocol,
+    # so we send `act=login` / `act=getassertion` against the same URL
+    # instead of using play.pokemonshowdown.com's split endpoints.
+    use_action_php_protocol = False
 
     @classmethod
-    async def create(cls, username, password, address):
+    async def create(cls, username, password, address, login_uri_override=None):
         self = PSWebsocketClient()
         self.username = username
         self.password = password
         self.address = address
         self.websocket = await websockets.connect(self.address)
-        self.login_uri = (
-            "https://play.pokemonshowdown.com/api/login"
-            if password
-            else "https://play.pokemonshowdown.com/action.php?"
-        )
+        override = (login_uri_override or "").strip()
+        if override:
+            self.login_uri = override
+            self.use_action_php_protocol = True
+            logger.info("Using custom login endpoint: %s", override)
+        else:
+            self.login_uri = (
+                "https://play.pokemonshowdown.com/api/login"
+                if password
+                else "https://play.pokemonshowdown.com/action.php?"
+            )
+            self.use_action_php_protocol = False
         return self
 
     async def join_room(self, room_name):
@@ -89,27 +101,34 @@ class PSWebsocketClient:
     async def login(self):
         logger.info("Logging in...")
         client_id, challstr = await self.get_id_and_challstr()
+        challstr_combined = "|".join([client_id, challstr])
 
         guest_login = self.password is None
 
         if guest_login:
-            response = requests.post(
-                self.login_uri,
-                data={
-                    "act": "getassertion",
-                    "userid": self.username,
-                    "challstr": "|".join([client_id, challstr]),
-                },
-            )
+            payload = {
+                "act": "getassertion",
+                "userid": self.username,
+                "challstr": challstr_combined,
+            }
+        elif self.use_action_php_protocol:
+            # Mirror servers (PokéAgent Challenge, private installs) only
+            # speak the older action.php protocol — explicit `act=login`.
+            payload = {
+                "act": "login",
+                "name": self.username,
+                "pass": self.password,
+                "challstr": challstr_combined,
+            }
         else:
-            response = requests.post(
-                self.login_uri,
-                data={
-                    "name": self.username,
-                    "pass": self.password,
-                    "challstr": "|".join([client_id, challstr]),
-                },
-            )
+            # Default play.pokemonshowdown.com — modern /api/login route.
+            payload = {
+                "name": self.username,
+                "pass": self.password,
+                "challstr": challstr_combined,
+            }
+
+        response = requests.post(self.login_uri, data=payload)
 
         if response.status_code != 200:
             logger.error(
@@ -117,9 +136,12 @@ class PSWebsocketClient:
             )
             raise LoginError("Could not get assertion")
 
+        response_json = None
         if guest_login:
             assertion = response.text
         else:
+            # Both /api/login and action.php's `act=login` return the same
+            # ]-prefixed JSON blob.
             response_json = json.loads(response.text[1:])
             if "actionsuccess" not in response_json:
                 logger.error("Login Unsuccessful: {}".format(response_json))
@@ -130,7 +152,9 @@ class PSWebsocketClient:
         logger.info("Successfully logged in")
         await self.send_message("", message)
         await asyncio.sleep(3)
-        return self.username if guest_login else response_json["curuser"]["userid"]
+        if guest_login or response_json is None:
+            return self.username
+        return response_json["curuser"]["userid"]
 
     async def update_team(self, team):
         await self.send_message("", ["/utm {}".format(team)])

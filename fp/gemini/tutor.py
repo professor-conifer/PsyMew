@@ -71,7 +71,6 @@ class TutorSession:
         if self._client is None:
             from config import FoulPlayConfig
             self._client = get_client(
-                auth_mode=FoulPlayConfig.gemini_auth_mode,
                 api_key_override=FoulPlayConfig.gemini_api_key,
             )
             # Use the dedicated tutor model (gemini-2.0-flash by default)
